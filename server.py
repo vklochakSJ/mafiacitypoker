@@ -303,7 +303,7 @@ async def ws_endpoint(ws: WebSocket):
         msg = json.loads(raw)
 
         if msg.get("type") != "join":
-            await ws.send_text(json.dumps({"type": "error", "message": "First message must be join"}, ensure_ascii=False))
+            await ws.send_text(json.dumps({"type": "error", "message": "Перше повідомлення має бути типу join"}, ensure_ascii=False))
             return
 
         room_id = (msg.get("room") or "default").strip()
@@ -315,7 +315,7 @@ async def ws_endpoint(ws: WebSocket):
         async with room.lock:
             if pid not in room.players:
                 if not room.can_join():
-                    await ws.send_text(json.dumps({"type": "error", "message": "Room is full (6 players)"}, ensure_ascii=False))
+                    await ws.send_text(json.dumps({"type": "error", "message": "Кімната заповнена (макс. 6 гравців)"}, ensure_ascii=False))
                     return
                 room.players[pid] = Player(pid=pid, name=name)
             else:
@@ -355,7 +355,7 @@ async def ws_endpoint(ws: WebSocket):
                     ctxt = msg.get("card", "")
                     c = parse_card_text(ctxt)
                     if c is None:
-                        await ws.send_text(json.dumps({"type": "error", "message": f"Bad card: {ctxt}"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
                         continue
                     player.hand.append(c)
 
@@ -365,14 +365,14 @@ async def ws_endpoint(ws: WebSocket):
                 elif t == "eval_selected":
                     idxs = msg.get("idxs", [])
                     if not isinstance(idxs, list):
-                        await ws.send_text(json.dumps({"type": "error", "message": "idxs must be list"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "idxs має бути списком"}, ensure_ascii=False))
                         continue
                     idxs = [int(i) for i in idxs]
                     if not (2 <= len(idxs) <= 5):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Select 2..5 cards"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
                     if any(i < 0 or i >= len(player.hand) for i in idxs):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Index out of range"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний індекс карти"}, ensure_ascii=False))
                         continue
 
                     cards = [player.hand[i] for i in idxs]
@@ -390,14 +390,14 @@ async def ws_endpoint(ws: WebSocket):
                 elif t == "archive_selected":
                     idxs = msg.get("idxs", [])
                     if not isinstance(idxs, list):
-                        await ws.send_text(json.dumps({"type": "error", "message": "idxs must be list"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "idxs має бути списком"}, ensure_ascii=False))
                         continue
                     idxs = [int(i) for i in idxs]
                     if not (2 <= len(idxs) <= 5):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Select 2..5 cards"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
                     if any(i < 0 or i >= len(player.hand) for i in idxs):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Index out of range"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний індекс карти"}, ensure_ascii=False))
                         continue
 
                     cards = [player.hand[i] for i in idxs]
@@ -433,7 +433,7 @@ async def ws_endpoint(ws: WebSocket):
                     break
 
                 else:
-                    await ws.send_text(json.dumps({"type": "error", "message": f"Unknown type: {t}"}, ensure_ascii=False))
+                    await ws.send_text(json.dumps({"type": "error", "message": f"Невідомий тип повідомлення {t}"}, ensure_ascii=False))
                     continue
 
                 await broadcast(room)
@@ -445,3 +445,4 @@ async def ws_endpoint(ws: WebSocket):
             async with room.lock:
                 room.sockets.pop(pid, None)
                 await broadcast(room)
+
