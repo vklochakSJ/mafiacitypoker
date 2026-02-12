@@ -59,6 +59,60 @@ function isRedSuit(cardTxt) {
   return cardTxt.includes("♥") || cardTxt.includes("♦");
 }
 
+/* ------------------ Sorting + Grouping ------------------ */
+
+const RANK_VALUE = {
+  "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+  "T": 10, "J": 11, "Q": 12, "K": 13, "A": 14
+};
+const SUIT_ORDER = { "♣": 1, "♦": 2, "♥": 3, "♠": 4 };
+
+function rankOf(cardTxt) {
+  // cardTxt like "A♠" or "T♦"
+  const r = cardTxt[0];
+  return RANK_VALUE[r] || 0;
+}
+
+function suitOf(cardTxt) {
+  return cardTxt[cardTxt.length - 1];
+}
+
+function sortCards(arr) {
+  return (arr || []).slice().sort((a, b) => {
+    const ra = rankOf(a), rb = rankOf(b);
+    if (ra !== rb) return ra - rb; // ascending by rank
+    const sa = SUIT_ORDER[suitOf(a)] || 0;
+    const sb = SUIT_ORDER[suitOf(b)] || 0;
+    if (sa !== sb) return sa - sb;
+    return a.localeCompare(b);
+  });
+}
+
+/**
+ * Groups identical cards (same text) and keeps all indices to allow selecting duplicates.
+ * Returns [{ card, count, indices[] }...] sorted by nominal.
+ */
+function groupHand(hand) {
+  const sorted = sortCards(hand);
+  const map = new Map(); // cardTxt -> indices in ORIGINAL hand
+  for (let i = 0; i < (hand || []).length; i++) {
+    const c = hand[i];
+    if (!map.has(c)) map.set(c, []);
+    map.get(c).push(i);
+  }
+
+  // group order based on sorted unique list
+  const seen = new Set();
+  const out = [];
+  for (const c of sorted) {
+    if (seen.has(c)) continue;
+    seen.add(c);
+    const idxs = map.get(c) || [];
+    out.push({ card: c, count: idxs.length, indices: idxs });
+  }
+  return out;
+}
+
 /* ------------------ Auto hints (debounced) ------------------ */
 
 let hintsTimer = null;
@@ -81,38 +135,69 @@ function render() {
   playersDiv.innerHTML = "";
   state.players.forEach(p => {
     const d = document.createElement("div");
-    const you = p.pid === myPid ? " (you)" : "";
+    const you = p.pid === myPid ? " (ви)" : "";
     const handCount = (p.hand || []).length;
     const archCount = (p.archive || []).length;
     d.className = "small";
-    d.textContent = `• ${p.name}${you} — hand: ${handCount}, archive: ${archCount}`;
+    d.textContent = `• ${p.name}${you} — карт у руці: ${handCount}, архів: ${archCount}`;
     playersDiv.appendChild(d);
   });
 
-  // My hand
+  // My hand (grouped + sorted)
   const me = meFromState();
   const handDiv = el("hand");
   handDiv.innerHTML = "";
 
-  selectedIdxs = new Set([...selectedIdxs].filter(i => me && i >= 0 && i < me.hand.length));
-
   if (me) {
-    me.hand.forEach((c, idx) => {
+    // keep selected indices only if still valid
+    selectedIdxs = new Set([...selectedIdxs].filter(i => i >= 0 && i < me.hand.length));
+
+    const groups = groupHand(me.hand);
+
+    groups.forEach(g => {
       const b = document.createElement("div");
+      const selCount = g.indices.filter(i => selectedIdxs.has(i)).length;
+
       b.className = "cardbtn"
-        + (isRedSuit(c) ? " red" : "")
-        + (selectedIdxs.has(idx) ? " selected" : "");
-      b.textContent = c;
+        + (isRedSuit(g.card) ? " red" : "")
+        + (selCount > 0 ? " selected" : "");
+      b.textContent = g.card;
+
+      // duplicate count badge (only when >1)
+      if (g.count > 1) {
+        const badge = document.createElement("div");
+        badge.className = "badge";
+        badge.textContent = String(g.count);
+        b.appendChild(badge);
+      }
+
+      // selected copies badge (only when >0)
+      if (selCount > 0) {
+        const badge2 = document.createElement("div");
+        badge2.className = "badge2";
+        badge2.textContent = g.count > 1 ? `${selCount}/${g.count}` : `${selCount}`;
+        b.appendChild(badge2);
+      }
+
+      // click cycles selection 0 -> 1 -> ... -> N -> 0
       b.onclick = () => {
-        if (selectedIdxs.has(idx)) selectedIdxs.delete(idx);
-        else selectedIdxs.add(idx);
+        const selectedHere = g.indices.filter(i => selectedIdxs.has(i));
+        if (selectedHere.length < g.count) {
+          // add next unselected copy
+          const next = g.indices.find(i => !selectedIdxs.has(i));
+          if (next !== undefined) selectedIdxs.add(next);
+        } else {
+          // all selected -> clear
+          g.indices.forEach(i => selectedIdxs.delete(i));
+        }
         render();
       };
+
       handDiv.appendChild(b);
     });
   }
 
-  // Opponents hands
+  // Opponents hands (grouped + sorted)
   const oppDiv = el("opponentHands");
   oppDiv.innerHTML = "";
 
@@ -129,10 +214,20 @@ function render() {
       const cards = document.createElement("div");
       cards.className = "opponent-cards";
 
-      (p.hand || []).forEach(cardTxt => {
+      const groups = groupHand(p.hand || []);
+
+      groups.forEach(g => {
         const cb = document.createElement("div");
-        cb.className = "cardbtn" + (isRedSuit(cardTxt) ? " red" : "");
-        cb.textContent = cardTxt;
+        cb.className = "cardbtn" + (isRedSuit(g.card) ? " red" : "");
+        cb.textContent = g.card;
+
+        if (g.count > 1) {
+          const badge = document.createElement("div");
+          badge.className = "badge";
+          badge.textContent = String(g.count);
+          cb.appendChild(badge);
+        }
+
         cards.appendChild(cb);
       });
 
@@ -154,7 +249,7 @@ function render() {
     });
   }
 
-  el("pid").textContent = myPid || "(none)";
+  el("pid").textContent = myPid || "(нема)";
 }
 
 /* ------------------ Connect ------------------ */
@@ -165,10 +260,10 @@ function connect() {
   ensurePid();
 
   const room = el("room").value.trim() || "default";
-  const name = el("name").value.trim() || "Player";
+  const name = el("name").value.trim() || "Гравець";
 
   ws = new WebSocket(wsUrl());
-  el("status").textContent = "connecting…";
+  el("status").textContent = "підключення…";
 
   ws.onopen = () => {
     send({ type: "join", room, name, pid: myPid });
@@ -178,9 +273,8 @@ function connect() {
     const msg = JSON.parse(ev.data);
 
     if (msg.type === "joined") {
-      el("status").textContent = `online (room: ${msg.room})`;
+      el("status").textContent = `онлайн (кімната: ${msg.room})`;
       setOnline(true);
-      // request hints early (state likely comes right after)
       requestHintsSoon();
       return;
     }
@@ -188,13 +282,12 @@ function connect() {
     if (msg.type === "state") {
       state = msg.state;
       render();
-      // ✅ auto hints whenever state changes (deal/add/archive/clear)
       requestHintsSoon();
       return;
     }
 
     if (msg.type === "eval_result") {
-      toast(`Оцінка: ${msg.cards.join(" ")} -> ${msg.label} | cat=${msg.cat} tb=${JSON.stringify(msg.tb)}`);
+      toast(`Оцінка: ${msg.cards.join(" ")} → ${msg.label} | cat=${msg.cat} tb=${JSON.stringify(msg.tb)}`);
       return;
     }
 
@@ -217,19 +310,19 @@ function connect() {
     }
 
     if (msg.type === "error") {
-      toast("Error: " + msg.message);
+      toast("Помилка: " + msg.message);
       return;
     }
   };
 
   ws.onclose = () => {
     ws = null;
-    el("status").textContent = "offline";
+    el("status").textContent = "офлайн";
     setOnline(false);
   };
 
   ws.onerror = () => {
-    toast("WebSocket error");
+    toast("Помилка WebSocket");
   };
 }
 
@@ -238,7 +331,7 @@ function disconnect() {
   try { send({ type: "leave" }); } catch {}
   ws.close();
   ws = null;
-  el("status").textContent = "offline";
+  el("status").textContent = "офлайн";
   setOnline(false);
 }
 
@@ -257,13 +350,12 @@ el("newIdBtn").onclick = () => {
   myPid = genPid();
   sessionStorage.setItem(PID_KEY, myPid);
   el("pid").textContent = myPid;
-  toast("New identity created for this tab.");
+  toast("Створено нового гравця для цієї вкладки.");
 };
 
 el("dealMeBtn").onclick = () => {
   const n = parseInt(el("dealN").value, 10) || 0;
   send({ type: "deal", n });
-  // hints will update after state arrives
 };
 
 el("dealAllBtn").onclick = () => {
@@ -283,14 +375,12 @@ el("clearHandBtn").onclick = () => send({ type: "clear_hand" });
 el("evalBtn").onclick = () => {
   const idxs = selectedIdxList();
   send({ type: "eval_selected", idxs });
-  // eval doesn't change hand, so no need to refresh hints here
 };
 
 el("archiveBtn").onclick = () => {
   const idxs = selectedIdxList();
   send({ type: "archive_selected", idxs });
   selectedIdxs.clear();
-  // hints will update after state arrives
 };
 
 // init
