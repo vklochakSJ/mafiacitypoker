@@ -221,8 +221,23 @@ def get_room(room_id: str) -> Room:
     return ROOMS[room_id]
 
 
-def random_cards(n: int) -> List[Tuple[str, str]]:
-    return [(random.choice(RANKS), random.choice(SUITS)) for _ in range(n)]
+def random_unique_cards(n: int) -> List[Tuple[str, str]]:
+    """
+    One 'deal' = no duplicates inside this batch.
+    Duplicates across different deals are still possible (multi-deck behavior).
+    """
+    if n < 0:
+    await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
+    continue
+if n > 52:
+    await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
+    continue
+    if n > 52:
+        # You can't have more than 52 unique cards in a single batch
+        raise ValueError("За одну роздачу не можна видати більше 52 унікальних карт")
+
+    deck = [(r, s) for r in RANKS for s in SUITS]  # 52 unique cards
+    return random.sample(deck, n)
 
 
 def room_snapshot(room: Room) -> Dict[str, Any]:
@@ -342,14 +357,14 @@ async def ws_endpoint(ws: WebSocket):
                     n = int(msg.get("n", 0))
                     if n < 0 or n > 200:
                         raise ValueError("Bad n")
-                    player.hand.extend(random_cards(n))
+                    player.hand.extend(random_unique_cards(n))
 
                 elif t == "deal_all":
                     n = int(msg.get("n", 0))
                     if n < 0 or n > 200:
                         raise ValueError("Bad n")
                     for p in room.players.values():
-                        p.hand.extend(random_cards(n))
+                        p.hand.extend(random_unique_cards(n))
 
                 elif t == "add_manual":
                     ctxt = msg.get("card", "")
@@ -445,4 +460,5 @@ async def ws_endpoint(ws: WebSocket):
             async with room.lock:
                 room.sockets.pop(pid, None)
                 await broadcast(room)
+
 
