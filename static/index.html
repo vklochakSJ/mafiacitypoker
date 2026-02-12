@@ -1,1 +1,94 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Poker Web (6 players)</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Poker Web (дублі карт дозволені)</h1>
+  </header>
 
+  <section class="card">
+    <h2>Підключення</h2>
+    <div class="row">
+      <label>Room:</label>
+      <input id="room" value="demo" />
+      <label>Name:</label>
+      <input id="name" value="Player" />
+      <button id="connectBtn">Connect</button>
+      <button id="disconnectBtn" disabled>Disconnect</button>
+      <button id="newIdBtn">New identity</button>
+    </div>
+    <div class="row small">
+      <span id="status">offline</span>
+      <span class="sep">•</span>
+      <span>Ваш pid: <code id="pid">(none)</code></span>
+      <span class="sep">•</span>
+      <span>Підказка: відкрий цю сторінку у 2–6 вкладках і зайди в один room.</span>
+    </div>
+  </section>
+
+  <main class="grid">
+    <section class="card">
+      <h2>Керування</h2>
+
+      <div class="row">
+        <label>Роздати N:</label>
+        <input id="dealN" type="number" min="0" value="5" />
+        <button id="dealMeBtn" disabled>Deal (me)</button>
+        <button id="dealAllBtn" disabled>Deal (all)</button>
+      </div>
+
+      <div class="row">
+        <label>Додати вручну:</label>
+        <input id="manualCard" placeholder="Напр: As або 10h або Q♦" />
+        <button id="addManualBtn" disabled>Add</button>
+      </div>
+
+      <div class="row">
+        <button id="clearHandBtn" disabled>Clear hand</button>
+      </div>
+
+      <div class="row">
+        <button id="evalBtn" disabled>Evaluate selected (2–5)</button>
+        <button id="archiveBtn" disabled>Archive selected (2–5)</button>
+      </div>
+
+      <div class="row">
+        <div id="toast" class="toast"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Гравці в кімнаті</h2>
+      <div id="players"></div>
+    </section>
+
+    <section class="card">
+      <h2>Моя рука</h2>
+      <div class="small">Клікни по карті щоб вибрати (можна кілька).</div>
+      <div id="hand" class="hand"></div>
+    </section>
+
+    <section class="card">
+      <h2>Руки опонентів</h2>
+      <div id="opponentHands" class="opponents"></div>
+    </section>
+
+    <section class="card">
+      <h2>Мій архів</h2>
+      <div id="archive" class="archive"></div>
+    </section>
+
+    <section class="card">
+      <h2>Підказки</h2>
+      <pre id="hints" class="hints">(підказки рахуються автоматично після змін у руці)</pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
