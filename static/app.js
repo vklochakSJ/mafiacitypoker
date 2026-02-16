@@ -31,10 +31,15 @@ function setOnline(on) {
 
   el("dealMeBtn").disabled = !on;
   el("dealAllBtn").disabled = !on;
-  el("addManualBtn").disabled = !on;
   el("clearHandBtn").disabled = !on;
   el("evalBtn").disabled = !on;
   el("archiveBtn").disabled = !on;
+
+  // suit dropdowns
+  el("pickC").disabled = !on;
+  el("pickD").disabled = !on;
+  el("pickH").disabled = !on;
+  el("pickS").disabled = !on;
 
   // allow new identity only when offline
   el("newIdBtn").disabled = on;
@@ -68,11 +73,9 @@ const RANK_VALUE = {
 const SUIT_ORDER = { "♣": 1, "♦": 2, "♥": 3, "♠": 4 };
 
 function rankOf(cardTxt) {
-  // cardTxt like "A♠" or "T♦"
   const r = cardTxt[0];
   return RANK_VALUE[r] || 0;
 }
-
 function suitOf(cardTxt) {
   return cardTxt[cardTxt.length - 1];
 }
@@ -88,10 +91,6 @@ function sortCards(arr) {
   });
 }
 
-/**
- * Groups identical cards (same text) and keeps all indices to allow selecting duplicates.
- * Returns [{ card, count, indices[] }...] sorted by nominal.
- */
 function groupHand(hand) {
   const sorted = sortCards(hand);
   const map = new Map(); // cardTxt -> indices in ORIGINAL hand
@@ -101,7 +100,6 @@ function groupHand(hand) {
     map.get(c).push(i);
   }
 
-  // group order based on sorted unique list
   const seen = new Set();
   const out = [];
   for (const c of sorted) {
@@ -123,6 +121,47 @@ function requestHintsSoon() {
   hintsTimer = setTimeout(() => {
     send({ type: "hints" });
   }, 120);
+}
+
+/* ------------------ Suit dropdowns ------------------ */
+
+const RANKS_DESC = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"];
+
+function fillSuitSelect(selectEl) {
+  selectEl.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = "";
+  opt0.textContent = "—";
+  selectEl.appendChild(opt0);
+
+  for (const r of RANKS_DESC) {
+    const o = document.createElement("option");
+    o.value = r;
+    o.textContent = r === "T" ? "10" : r;
+    selectEl.appendChild(o);
+  }
+}
+
+function setupSuitPickers() {
+  const pickC = el("pickC");
+  const pickD = el("pickD");
+  const pickH = el("pickH");
+  const pickS = el("pickS");
+
+  [pickC, pickD, pickH, pickS].forEach(fillSuitSelect);
+
+  const onPick = (suit, picker) => {
+    const r = picker.value;
+    if (!r) return;
+    // send manual add in server-supported format like "A♠"
+    send({ type: "add_manual", card: `${r}${suit}` });
+    picker.value = "";
+  };
+
+  pickC.onchange = () => onPick("♣", pickC);
+  pickD.onchange = () => onPick("♦", pickD);
+  pickH.onchange = () => onPick("♥", pickH);
+  pickS.onchange = () => onPick("♠", pickS);
 }
 
 /* ------------------ Render ------------------ */
@@ -149,9 +188,7 @@ function render() {
   handDiv.innerHTML = "";
 
   if (me) {
-    // keep selected indices only if still valid
     selectedIdxs = new Set([...selectedIdxs].filter(i => i >= 0 && i < me.hand.length));
-
     const groups = groupHand(me.hand);
 
     groups.forEach(g => {
@@ -163,7 +200,6 @@ function render() {
         + (selCount > 0 ? " selected" : "");
       b.textContent = g.card;
 
-      // duplicate count badge (only when >1)
       if (g.count > 1) {
         const badge = document.createElement("div");
         badge.className = "badge";
@@ -171,7 +207,6 @@ function render() {
         b.appendChild(badge);
       }
 
-      // selected copies badge (only when >0)
       if (selCount > 0) {
         const badge2 = document.createElement("div");
         badge2.className = "badge2";
@@ -179,15 +214,12 @@ function render() {
         b.appendChild(badge2);
       }
 
-      // click cycles selection 0 -> 1 -> ... -> N -> 0
       b.onclick = () => {
         const selectedHere = g.indices.filter(i => selectedIdxs.has(i));
         if (selectedHere.length < g.count) {
-          // add next unselected copy
           const next = g.indices.find(i => !selectedIdxs.has(i));
           if (next !== undefined) selectedIdxs.add(next);
         } else {
-          // all selected -> clear
           g.indices.forEach(i => selectedIdxs.delete(i));
         }
         render();
@@ -215,7 +247,6 @@ function render() {
       cards.className = "opponent-cards";
 
       const groups = groupHand(p.hand || []);
-
       groups.forEach(g => {
         const cb = document.createElement("div");
         cb.className = "cardbtn" + (isRedSuit(g.card) ? " red" : "");
@@ -363,13 +394,6 @@ el("dealAllBtn").onclick = () => {
   send({ type: "deal_all", n });
 };
 
-el("addManualBtn").onclick = () => {
-  const c = el("manualCard").value.trim();
-  if (!c) return;
-  send({ type: "add_manual", card: c });
-  el("manualCard").value = "";
-};
-
 el("clearHandBtn").onclick = () => send({ type: "clear_hand" });
 
 el("evalBtn").onclick = () => {
@@ -386,3 +410,4 @@ el("archiveBtn").onclick = () => {
 // init
 setOnline(false);
 ensurePid();
+setupSuitPickers();
