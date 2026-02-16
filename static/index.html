@@ -42,10 +42,31 @@
         <button id="dealAllBtn" disabled>Роздати (всім)</button>
       </div>
 
+      <!-- ✅ NEW: 4 suit dropdowns -->
       <div class="row">
-        <label>Додати вручну:</label>
-        <input id="manualCard" placeholder="Напр: As або 10h або Q♦" />
-        <button id="addManualBtn" disabled>Додати</button>
+        <label>Додати карту:</label>
+
+        <div class="suitpicker">
+          <span class="suitlabel">♣</span>
+          <select id="pickC" disabled></select>
+        </div>
+
+        <div class="suitpicker">
+          <span class="suitlabel red">♦</span>
+          <select id="pickD" disabled></select>
+        </div>
+
+        <div class="suitpicker">
+          <span class="suitlabel red">♥</span>
+          <select id="pickH" disabled></select>
+        </div>
+
+        <div class="suitpicker">
+          <span class="suitlabel">♠</span>
+          <select id="pickS" disabled></select>
+        </div>
+
+        <span class="small">Вибір у списку одразу додає карту.</span>
       </div>
 
       <div class="row">
