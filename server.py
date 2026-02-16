@@ -26,6 +26,7 @@ def straight_high(values: List[int]) -> Optional[int]:
     v = sorted(set(values))
     if len(v) != n:
         return None
+    # Wheel A-2-3-4-5
     if n == 5 and v == [2, 3, 4, 5, 14]:
         return 5
     if max(v) - min(v) == n - 1:
@@ -53,7 +54,7 @@ CAT_5 = {
 def eval_strict(cards: List[Tuple[str, str]]) -> Tuple[int, Tuple[int, ...], str]:
     n = len(cards)
     if not (2 <= n <= 5):
-        raise ValueError("Need 2..5 cards")
+        raise ValueError("Потрібно 2–5 карт")
 
     ranks = [r for r, _ in cards]
     suits = [s for _, s in cards]
@@ -198,7 +199,7 @@ class Player:
     pid: str
     name: str
     hand: List[Tuple[str, str]] = field(default_factory=list)
-    archive: List[Dict[str, Any]] = field(default_factory=list)  # only for owner display in UI
+    archive: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -223,29 +224,25 @@ def get_room(room_id: str) -> Room:
 
 def random_unique_cards(n: int) -> List[Tuple[str, str]]:
     """
-    One 'deal' = no duplicates inside this batch.
-    Duplicates across different deals are still possible (multi-deck behavior).
+    За ОДНУ роздачу (один натиск deal/deal_all) — без дублів карт.
+    Дублі між різними роздачами все одно можливі (поведінка "кілька колод").
     """
     if n < 0:
-    await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
-    continue
-if n > 52:
-    await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
-    continue
+        raise ValueError("N має бути ≥ 0")
     if n > 52:
-        # You can't have more than 52 unique cards in a single batch
-        raise ValueError("За одну роздачу не можна видати більше 52 унікальних карт")
+        raise ValueError("За одну роздачу максимум 52 унікальні карти")
 
     deck = [(r, s) for r in RANKS for s in SUITS]  # 52 unique cards
-    return random.sample(deck, n)
+    batch = random.sample(deck, n)
+
+    # guard (на випадок помилок у майбутньому)
+    if len(set(batch)) != len(batch):
+        raise RuntimeError("ПОМИЛКА: дубль у межах однієї роздачі (цього не має статись)")
+
+    return batch
 
 
 def room_snapshot(room: Room) -> Dict[str, Any]:
-    """
-    Shared snapshot:
-    - includes all players hands (so each client can show opponents hands)
-    - archives included too; UI will only display own archive
-    """
     plist = []
     for p in room.players.values():
         plist.append({
@@ -318,11 +315,14 @@ async def ws_endpoint(ws: WebSocket):
         msg = json.loads(raw)
 
         if msg.get("type") != "join":
-            await ws.send_text(json.dumps({"type": "error", "message": "Перше повідомлення має бути типу join"}, ensure_ascii=False))
+            await ws.send_text(json.dumps(
+                {"type": "error", "message": "Перше повідомлення має бути типу join"},
+                ensure_ascii=False
+            ))
             return
 
         room_id = (msg.get("room") or "default").strip()
-        name = (msg.get("name") or "Player").strip()[:20]
+        name = (msg.get("name") or "Гравець").strip()[:20]
         pid = (msg.get("pid") or "").strip() or f"p{random.randint(100000, 999999)}"
 
         room = get_room(room_id)
@@ -330,7 +330,10 @@ async def ws_endpoint(ws: WebSocket):
         async with room.lock:
             if pid not in room.players:
                 if not room.can_join():
-                    await ws.send_text(json.dumps({"type": "error", "message": "Кімната заповнена (макс. 6 гравців)"}, ensure_ascii=False))
+                    await ws.send_text(json.dumps(
+                        {"type": "error", "message": "Кімната заповнена (макс. 6 гравців)"},
+                        ensure_ascii=False
+                    ))
                     return
                 room.players[pid] = Player(pid=pid, name=name)
             else:
@@ -355,14 +358,26 @@ async def ws_endpoint(ws: WebSocket):
 
                 if t == "deal":
                     n = int(msg.get("n", 0))
-                    if n < 0 or n > 200:
-                        raise ValueError("Bad n")
+
+                    if n < 0:
+                        await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
+                        continue
+                    if n > 52:
+                        await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
+                        continue
+
                     player.hand.extend(random_unique_cards(n))
 
                 elif t == "deal_all":
                     n = int(msg.get("n", 0))
-                    if n < 0 or n > 200:
-                        raise ValueError("Bad n")
+
+                    if n < 0:
+                        await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
+                        continue
+                    if n > 52:
+                        await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
+                        continue
+
                     for p in room.players.values():
                         p.hand.extend(random_unique_cards(n))
 
@@ -370,7 +385,10 @@ async def ws_endpoint(ws: WebSocket):
                     ctxt = msg.get("card", "")
                     c = parse_card_text(ctxt)
                     if c is None:
-                        await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps(
+                            {"type": "error", "message": f"Невірна карта: {ctxt}"},
+                            ensure_ascii=False
+                        ))
                         continue
                     player.hand.append(c)
 
@@ -448,7 +466,10 @@ async def ws_endpoint(ws: WebSocket):
                     break
 
                 else:
-                    await ws.send_text(json.dumps({"type": "error", "message": f"Невідомий тип повідомлення {t}"}, ensure_ascii=False))
+                    await ws.send_text(json.dumps(
+                        {"type": "error", "message": f"Невідомий тип повідомлення: {t}"},
+                        ensure_ascii=False
+                    ))
                     continue
 
                 await broadcast(room)
@@ -460,5 +481,3 @@ async def ws_endpoint(ws: WebSocket):
             async with room.lock:
                 room.sockets.pop(pid, None)
                 await broadcast(room)
-
-
