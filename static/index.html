@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <h1>Poker Web (дублі карт дозволені)</h1>
+    <h1>Poker Web</h1>
   </header>
 
   <section class="card">
@@ -27,7 +27,7 @@
       <span class="sep">•</span>
       <span>Ваш pid: <code id="pid">(нема)</code></span>
       <span class="sep">•</span>
-      <span>Порада: відкрий цю сторінку у 2–6 вкладках і зайди в одну кімнату різними іменами.</span>
+      <span>Відкрий цю сторінку у 2–6 вкладках і зайди в одну кімнату.</span>
     </div>
   </section>
 
@@ -42,7 +42,6 @@
         <button id="dealAllBtn" disabled>Роздати (всім)</button>
       </div>
 
-      <!-- ✅ NEW: 4 suit dropdowns -->
       <div class="row">
         <label>Додати карту:</label>
 
@@ -65,17 +64,20 @@
           <span class="suitlabel">♠</span>
           <select id="pickS" disabled></select>
         </div>
-
-        <span class="small">Вибір у списку одразу додає карту.</span>
       </div>
 
       <div class="row">
         <button id="clearHandBtn" disabled>Очистити руку</button>
+        <button id="evalBtn" disabled>Оцінити вибране (2–5)</button>
       </div>
 
+      <hr/>
+
       <div class="row">
-        <button id="evalBtn" disabled>Оцінити вибране (2–5)</button>
-        <button id="archiveBtn" disabled>В архів (2–5)</button>
+        <label>Стіл:</label>
+        <select id="tableSelect" disabled></select>
+        <button id="playBtn" disabled>Покласти на стіл (2–5)</button>
+        <button id="endRoundBtn" disabled>Завершити раунд</button>
       </div>
 
       <div class="row">
@@ -90,25 +92,29 @@
 
     <section class="card">
       <h2>Моя рука</h2>
-      <div class="small">
-        Клік по карті додає 1 копію до вибору (для дублів — циклічно 0→1→…→N→0).
-      </div>
+      <div class="small">Клік по карті додає 1 копію до вибору (для дублів — циклічно).</div>
       <div id="hand" class="hand"></div>
     </section>
 
     <section class="card">
-      <h2>Руки опонентів</h2>
-      <div id="opponentHands" class="opponents"></div>
+      <h2>Мої комбінації в цьому раунді</h2>
+      <div class="small">Інші гравці цього не бачать.</div>
+      <div id="myPending"></div>
     </section>
 
     <section class="card">
-      <h2>Мій архів</h2>
-      <div id="archive" class="archive"></div>
+      <h2>Результати останнього раунду</h2>
+      <div id="lastRound"></div>
+    </section>
+
+    <section class="card">
+      <h2>Історія боїв</h2>
+      <div id="history"></div>
     </section>
 
     <section class="card">
       <h2>Підказки</h2>
-      <pre id="hints" class="hints">(підказки рахуються автоматично після змін у руці)</pre>
+      <pre id="hints" class="hints">(підказки рахуються автоматично)</pre>
     </section>
   </main>
 
