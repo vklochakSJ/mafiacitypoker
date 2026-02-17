@@ -185,3 +185,21 @@ select {
   border: 1px solid #ddd;
   background: #fff;
 }
+
+.suitpicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid #eee;
+  border-radius: 12px;
+}
+.suitlabel { font-weight: 700; font-size: 16px; line-height: 1; }
+.suitlabel.red { color: #c1121f; }
+select {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+hr { border: none; border-top: 1px solid #eee; margin: 10px 0; }
