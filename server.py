@@ -10,6 +10,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 
+# ------------------ Tables ------------------
+
+TABLES = [
+    "МІДТАУН","ФЕЛБЛОК","ГАРЛЕМ","РІВЕРСАЙД","ОКСМІР","ІНДЕЙЛ","ХАРБОР","ХІЛЛФОРД","БРАЙТОН","ЯРВІК",
+    "ХАЙТС","ГРЕЙРОК","НОРТБРІДЖ","БЕЙСАЙД","КРОСБІ","ІСТ-ТАУН","САУЗБРІДЖ","ГРІНВЕЙ","ТОРВІК","ДАУНТАУН",
+    "БРУКЛІН","ЛІБЕРТІ","ЕШПАРК","СОХО","ВЕСТ-САЙД","АЙРОНХІЛЛ","САУЗГЕЙТ","ФЕЙРМОНТ","ХАЙЛЕНД","ТВІНС",
+]
+
+
 # ------------------ Cards / Evaluation ------------------
 
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
@@ -26,7 +35,6 @@ def straight_high(values: List[int]) -> Optional[int]:
     v = sorted(set(values))
     if len(v) != n:
         return None
-    # Wheel A-2-3-4-5
     if n == 5 and v == [2, 3, 4, 5, 14]:
         return 5
     if max(v) - min(v) == n - 1:
@@ -34,7 +42,6 @@ def straight_high(values: List[int]) -> Optional[int]:
     return None
 
 
-# Strict category ranks per size (higher = better).
 CAT_2 = {"HIGH": 1, "PAIR": 2}
 CAT_3 = {"HIGH": 1, "PAIR": 2, "TRIPS": 3, "FLUSH": 4, "STRAIGHT": 5}
 CAT_4 = {"HIGH": 1, "PAIR": 2, "TWO_PAIR": 3, "TRIPS": 4, "FLUSH": 5, "STRAIGHT": 6, "QUADS": 7}
@@ -111,7 +118,7 @@ def eval_strict(cards: List[Tuple[str, str]]) -> Tuple[int, Tuple[int, ...], str
             return CAT_4["FLUSH"], tuple(sorted(values, reverse=True)), "Флеш (4)"
         return CAT_4["HIGH"], tuple(sorted(values, reverse=True)), "Старші карти"
 
-    # n == 5 (standard)
+    # n == 5
     if sh is not None and is_flush:
         return CAT_5["STRAIGHT_FLUSH"], (sh,), "Стріт-флеш"
     if items[0][1] == 4:
@@ -192,14 +199,42 @@ def find_flushes_5plus(hand: List[Tuple[str, str]]) -> List[List[Tuple[str, str]
     return out
 
 
-# ------------------ Room / Players ------------------
+# ------------------ Room / Players / Plays ------------------
 
 @dataclass
 class Player:
     pid: str
     name: str
     hand: List[Tuple[str, str]] = field(default_factory=list)
-    archive: List[Dict[str, Any]] = field(default_factory=list)
+    archive: List[Dict[str, Any]] = field(default_factory=list)  # personal archive (optional)
+
+
+@dataclass
+class Play:
+    pid: str
+    name: str
+    table: str
+    cards: List[Tuple[str, str]]
+    cat: int
+    tb: Tuple[int, ...]
+    label: str
+
+    def key(self) -> Tuple[int, Tuple[int, ...]]:
+        return (self.cat, self.tb)
+
+    def to_public(self) -> Dict[str, Any]:
+        return {
+            "pid": self.pid,
+            "name": self.name,
+            "table": self.table,
+            "cards": [card_str(c) for c in self.cards],
+            "cat": self.cat,
+            "tb": list(self.tb),
+            "label": self.label,
+        }
+
+    def to_private(self) -> Dict[str, Any]:
+        return self.to_public()
 
 
 @dataclass
@@ -208,6 +243,13 @@ class Room:
     players: Dict[str, Player] = field(default_factory=dict)
     sockets: Dict[str, WebSocket] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    # table -> plays (hidden during round)
+    pending: Dict[str, List[Play]] = field(default_factory=lambda: {t: [] for t in TABLES})
+
+    # battle history: list of rounds
+    battle_history: List[Dict[str, Any]] = field(default_factory=list)
+    round_no: int = 0
 
     def can_join(self) -> bool:
         return len(self.players) < 6
@@ -224,54 +266,24 @@ def get_room(room_id: str) -> Room:
 
 def random_unique_cards(n: int) -> List[Tuple[str, str]]:
     """
-    За ОДНУ роздачу (один натиск deal/deal_all) — без дублів карт.
-    Дублі між різними роздачами все одно можливі (поведінка "кілька колод").
+    За ОДНУ роздачу — без дублів карт.
+    Дублі між різними роздачами можливі (поведінка "кілька колод").
     """
     if n < 0:
         raise ValueError("N має бути ≥ 0")
     if n > 52:
         raise ValueError("За одну роздачу максимум 52 унікальні карти")
-
-    deck = [(r, s) for r in RANKS for s in SUITS]  # 52 unique cards
+    deck = [(r, s) for r in RANKS for s in SUITS]
     batch = random.sample(deck, n)
-
-    # guard (на випадок помилок у майбутньому)
     if len(set(batch)) != len(batch):
-        raise RuntimeError("ПОМИЛКА: дубль у межах однієї роздачі (цього не має статись)")
-
+        raise RuntimeError("ПОМИЛКА: дубль у межах однієї роздачі")
     return batch
-
-
-def room_snapshot(room: Room) -> Dict[str, Any]:
-    plist = []
-    for p in room.players.values():
-        plist.append({
-            "pid": p.pid,
-            "name": p.name,
-            "hand": [card_str(c) for c in p.hand],
-            "archive": p.archive,
-        })
-    return {"room": room.room_id, "players": plist}
-
-
-async def broadcast(room: Room) -> None:
-    snap = room_snapshot(room)
-    msg = {"type": "state", "state": snap}
-    dead: List[str] = []
-    for pid, ws in room.sockets.items():
-        try:
-            await ws.send_text(json.dumps(msg, ensure_ascii=False))
-        except Exception:
-            dead.append(pid)
-    for pid in dead:
-        room.sockets.pop(pid, None)
 
 
 def parse_card_text(t: str) -> Optional[Tuple[str, str]]:
     t = (t or "").strip()
     if not t:
         return None
-
     suit_map = {
         "c": "♣", "♣": "♣",
         "d": "♦", "♦": "♦",
@@ -287,14 +299,90 @@ def parse_card_text(t: str) -> Optional[Tuple[str, str]]:
     rank = "T" if rank_part == "10" else rank_part.upper()
     if rank not in RANKS:
         return None
-
     return (rank, suit)
+
+
+def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
+    # players (hands are visible as in your current game)
+    plist = []
+    for p in room.players.values():
+        plist.append({
+            "pid": p.pid,
+            "name": p.name,
+            "hand": [card_str(c) for c in p.hand],
+            "archive": p.archive,  # UI will show only own archive anyway
+        })
+
+    # only viewer sees their own pending plays
+    my_pending: Dict[str, List[Dict[str, Any]]] = {t: [] for t in TABLES}
+    for t in TABLES:
+        for play in room.pending.get(t, []):
+            if play.pid == viewer_pid:
+                my_pending[t].append(play.to_private())
+
+    # last results (most recent round)
+    last_round = room.battle_history[-1] if room.battle_history else None
+
+    return {
+        "room": room.room_id,
+        "tables": TABLES,
+        "round_no": room.round_no,
+        "players": plist,
+        "my_pending": my_pending,
+        "last_round": last_round,
+        "battle_history": room.battle_history[-20:],  # last 20 rounds
+    }
+
+
+async def broadcast(room: Room) -> None:
+    dead: List[str] = []
+    for pid, ws in room.sockets.items():
+        try:
+            snap = room_snapshot_for(room, pid)
+            await ws.send_text(json.dumps({"type": "state", "state": snap}, ensure_ascii=False))
+        except Exception:
+            dead.append(pid)
+    for pid in dead:
+        room.sockets.pop(pid, None)
+
+
+def resolve_round(room: Room) -> Dict[str, Any]:
+    room.round_no += 1
+    round_id = room.round_no
+
+    tables_out: List[Dict[str, Any]] = []
+
+    for t in TABLES:
+        plays = room.pending.get(t, [])
+        if not plays:
+            continue
+
+        # winner = max by (cat, tb); tb is tuple and compares lexicographically
+        best_key = max(p.key() for p in plays)
+        winners = [p for p in plays if p.key() == best_key]
+
+        tables_out.append({
+            "table": t,
+            "plays": [p.to_public() for p in plays],
+            "winners": [p.to_public() for p in winners],
+        })
+
+    round_rec = {
+        "round": round_id,
+        "tables": tables_out,
+    }
+
+    room.battle_history.append(round_rec)
+
+    # clear pending for next round
+    room.pending = {t: [] for t in TABLES}
+
+    return round_rec
 
 
 # ------------------ FastAPI ------------------
 
 app = FastAPI()
-
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -315,10 +403,7 @@ async def ws_endpoint(ws: WebSocket):
         msg = json.loads(raw)
 
         if msg.get("type") != "join":
-            await ws.send_text(json.dumps(
-                {"type": "error", "message": "Перше повідомлення має бути типу join"},
-                ensure_ascii=False
-            ))
+            await ws.send_text(json.dumps({"type": "error", "message": "Перше повідомлення має бути типу join"}, ensure_ascii=False))
             return
 
         room_id = (msg.get("room") or "default").strip()
@@ -330,10 +415,7 @@ async def ws_endpoint(ws: WebSocket):
         async with room.lock:
             if pid not in room.players:
                 if not room.can_join():
-                    await ws.send_text(json.dumps(
-                        {"type": "error", "message": "Кімната заповнена (макс. 6 гравців)"},
-                        ensure_ascii=False
-                    ))
+                    await ws.send_text(json.dumps({"type": "error", "message": "Кімната заповнена (макс. 6 гравців)"}, ensure_ascii=False))
                     return
                 room.players[pid] = Player(pid=pid, name=name)
             else:
@@ -358,26 +440,22 @@ async def ws_endpoint(ws: WebSocket):
 
                 if t == "deal":
                     n = int(msg.get("n", 0))
-
                     if n < 0:
                         await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
                         continue
                     if n > 52:
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
-
                     player.hand.extend(random_unique_cards(n))
 
                 elif t == "deal_all":
                     n = int(msg.get("n", 0))
-
                     if n < 0:
                         await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
                         continue
                     if n > 52:
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
-
                     for p in room.players.values():
                         p.hand.extend(random_unique_cards(n))
 
@@ -385,10 +463,7 @@ async def ws_endpoint(ws: WebSocket):
                     ctxt = msg.get("card", "")
                     c = parse_card_text(ctxt)
                     if c is None:
-                        await ws.send_text(json.dumps(
-                            {"type": "error", "message": f"Невірна карта: {ctxt}"},
-                            ensure_ascii=False
-                        ))
+                        await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
                         continue
                     player.hand.append(c)
 
@@ -420,6 +495,43 @@ async def ws_endpoint(ws: WebSocket):
                     }, ensure_ascii=False))
                     continue
 
+                # ✅ NEW: play selected on a table (hidden during round)
+                elif t == "play_selected":
+                    table = (msg.get("table") or "").strip()
+                    if table not in TABLES:
+                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний стіл"}, ensure_ascii=False))
+                        continue
+
+                    idxs = msg.get("idxs", [])
+                    if not isinstance(idxs, list):
+                        await ws.send_text(json.dumps({"type": "error", "message": "idxs має бути списком"}, ensure_ascii=False))
+                        continue
+                    idxs = [int(i) for i in idxs]
+                    if not (2 <= len(idxs) <= 5):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
+                        continue
+                    if any(i < 0 or i >= len(player.hand) for i in idxs):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний індекс карти"}, ensure_ascii=False))
+                        continue
+
+                    cards = [player.hand[i] for i in idxs]
+                    cat, tb, label = eval_strict(cards)
+
+                    # remove from hand
+                    for i in sorted(idxs, reverse=True):
+                        del player.hand[i]
+
+                    room.pending[table].append(Play(
+                        pid=player.pid,
+                        name=player.name,
+                        table=table,
+                        cards=cards,
+                        cat=cat,
+                        tb=tb,
+                        label=label,
+                    ))
+
+                # optional old personal archive
                 elif t == "archive_selected":
                     idxs = msg.get("idxs", [])
                     if not isinstance(idxs, list):
@@ -462,14 +574,21 @@ async def ws_endpoint(ws: WebSocket):
                     }, ensure_ascii=False))
                     continue
 
+                # ✅ NEW: end round
+                elif t == "end_round":
+                    rr = resolve_round(room)
+                    # send a one-time message too (optional; clients anyway get state)
+                    for _pid, _ws in list(room.sockets.items()):
+                        try:
+                            await _ws.send_text(json.dumps({"type": "round_result", "round": rr}, ensure_ascii=False))
+                        except Exception:
+                            pass
+
                 elif t == "leave":
                     break
 
                 else:
-                    await ws.send_text(json.dumps(
-                        {"type": "error", "message": f"Невідомий тип повідомлення: {t}"},
-                        ensure_ascii=False
-                    ))
+                    await ws.send_text(json.dumps({"type": "error", "message": f"Невідомий тип повідомлення: {t}"}, ensure_ascii=False))
                     continue
 
                 await broadcast(room)
