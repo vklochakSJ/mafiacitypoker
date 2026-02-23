@@ -152,9 +152,9 @@ def eval_strict(cards: List[Tuple[str, str]]) -> Tuple[int, Tuple[int, ...], str
 
 # ------------------ Hints ------------------
 
-def find_pairs_trips_quads(hand: List[Tuple[str, str]]) -> Dict[str, List[List[Tuple[str, str]]]]:
+def find_pairs_trips_quads(hand_cards: List[Tuple[str, str]]) -> Dict[str, List[List[Tuple[str, str]]]]:
     by_rank: Dict[str, List[Tuple[str, str]]] = {}
-    for c in hand:
+    for c in hand_cards:
         by_rank.setdefault(c[0], []).append(c)
     out = {"pairs": [], "trips": [], "quads": []}
     for _, cards in by_rank.items():
@@ -167,9 +167,9 @@ def find_pairs_trips_quads(hand: List[Tuple[str, str]]) -> Dict[str, List[List[T
     return out
 
 
-def find_straights_5(hand: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+def find_straights_5(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
     by_rank: Dict[int, List[Tuple[str, str]]] = {}
-    for r, s in hand:
+    for r, s in hand_cards:
         by_rank.setdefault(RANK_VALUE[r], []).append((r, s))
     straights: List[List[Tuple[str, str]]] = []
 
@@ -188,9 +188,9 @@ def find_straights_5(hand: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]
     return straights
 
 
-def find_flushes_5plus(hand: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+def find_flushes_5plus(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
     by_suit: Dict[str, List[Tuple[str, str]]] = {}
-    for c in hand:
+    for c in hand_cards:
         by_suit.setdefault(c[1], []).append(c)
     out: List[List[Tuple[str, str]]] = []
     for _, cards in by_suit.items():
@@ -200,13 +200,29 @@ def find_flushes_5plus(hand: List[Tuple[str, str]]) -> List[List[Tuple[str, str]
     return out
 
 
-# ------------------ Room / Players / Plays ------------------
+# ------------------ Room / Players / Card instances ------------------
+
+@dataclass
+class CardInst:
+    id: int
+    rank: str
+    suit: str
+
+    def as_tuple(self) -> Tuple[str, str]:
+        return (self.rank, self.suit)
+
+    def as_text(self) -> str:
+        return f"{self.rank}{self.suit}"
+
+    def to_json(self) -> Dict[str, Any]:
+        return {"id": self.id, "c": self.as_text()}
+
 
 @dataclass
 class Player:
     pid: str
     name: str
-    hand: List[Tuple[str, str]] = field(default_factory=list)
+    hand: List[CardInst] = field(default_factory=list)
     archive: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -215,12 +231,13 @@ class Play:
     pid: str
     name: str
     table: str
-    cards: List[Tuple[str, str]]
+    card_ids: List[int]
+    cards_text: List[str]
     cat: int
     tb: Tuple[int, ...]
     label: str
     placed_ms: int
-    placed_seq: int  # increasing per room; tie-breaker
+    placed_seq: int
 
     def strength_key(self) -> Tuple[int, Tuple[int, ...]]:
         return (self.cat, self.tb)
@@ -230,7 +247,7 @@ class Play:
             "pid": self.pid,
             "name": self.name,
             "table": self.table,
-            "cards": [card_str(c) for c in self.cards],
+            "cards": self.cards_text,
             "cat": self.cat,
             "tb": list(self.tb),
             "label": self.label,
@@ -250,14 +267,18 @@ class Room:
     battle_history: List[Dict[str, Any]] = field(default_factory=list)
     round_no: int = 0
 
-    # ✅ readiness (soft end)
     ready_pids: Set[str] = field(default_factory=set)
-
-    # ✅ placement order
     play_seq: int = 0
+
+    next_card_id: int = 1
 
     def can_join(self) -> bool:
         return len(self.players) < 6
+
+    def new_card(self, rank: str, suit: str) -> CardInst:
+        cid = self.next_card_id
+        self.next_card_id += 1
+        return CardInst(id=cid, rank=rank, suit=suit)
 
 
 ROOMS: Dict[str, Room] = {}
@@ -304,12 +325,20 @@ def parse_card_text(t: str) -> Optional[Tuple[str, str]]:
 
 
 def involved_pids(room: Room) -> Set[str]:
-    """Players who have at least one play in current round."""
     s: Set[str] = set()
     for t in TABLES:
         for p in room.pending.get(t, []):
             s.add(p.pid)
     return s
+
+
+def used_card_ids_in_round(room: Room, pid: str) -> Set[int]:
+    used: Set[int] = set()
+    for t in TABLES:
+        for play in room.pending.get(t, []):
+            if play.pid == pid:
+                used.update(play.card_ids)
+    return used
 
 
 def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
@@ -318,11 +347,10 @@ def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
         plist.append({
             "pid": p.pid,
             "name": p.name,
-            "hand": [card_str(c) for c in p.hand],
+            "hand": [c.to_json() for c in p.hand],  # ✅ now objects {id,c}
             "archive": p.archive,
         })
 
-    # only viewer sees their own pending plays
     my_pending: Dict[str, List[Dict[str, Any]]] = {t: [] for t in TABLES}
     for t in TABLES:
         for play in room.pending.get(t, []):
@@ -330,8 +358,6 @@ def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
                 my_pending[t].append(play.to_public())
 
     inv = involved_pids(room)
-    ready = room.ready_pids
-
     last_round = room.battle_history[-1] if room.battle_history else None
 
     return {
@@ -344,10 +370,9 @@ def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
         "last_round": last_round,
         "battle_history": room.battle_history[-20:],
 
-        # ✅ readiness status (counts only)
         "involved_count": len(inv),
-        "ready_count": len(inv.intersection(ready)),
-        "you_ready": (viewer_pid in ready),
+        "ready_count": len(inv.intersection(room.ready_pids)),
+        "you_ready": (viewer_pid in room.ready_pids),
     }
 
 
@@ -369,16 +394,18 @@ def resolve_round(room: Room) -> Dict[str, Any]:
 
     tables_out: List[Dict[str, Any]] = []
 
+    # collect all played card ids per pid -> remove after round end
+    remove_by_pid: Dict[str, Set[int]] = {}
+
     for t in TABLES:
         plays = room.pending.get(t, [])
         if not plays:
             continue
 
-        # strongest by (cat, tb)
         best_strength = max(p.strength_key() for p in plays)
         best_plays = [p for p in plays if p.strength_key() == best_strength]
 
-        # ✅ tie-break: earlier placed wins (smaller placed_seq)
+        # tie-break: earlier placed wins
         winner = min(best_plays, key=lambda p: p.placed_seq)
 
         tables_out.append({
@@ -387,17 +414,21 @@ def resolve_round(room: Room) -> Dict[str, Any]:
             "winner": winner.to_public(),
         })
 
-    round_rec = {
-        "round": round_id,
-        "tables": tables_out,
-    }
+        for p in plays:
+            remove_by_pid.setdefault(p.pid, set()).update(p.card_ids)
 
+    # ✅ remove cards from hands ONLY NOW (after round end)
+    for pid, ids in remove_by_pid.items():
+        if pid not in room.players:
+            continue
+        pl = room.players[pid]
+        pl.hand = [c for c in pl.hand if c.id not in ids]
+
+    round_rec = {"round": round_id, "tables": tables_out}
     room.battle_history.append(round_rec)
 
-    # reset for next round
     room.pending = {t: [] for t in TABLES}
     room.ready_pids.clear()
-
     return round_rec
 
 
@@ -476,7 +507,8 @@ async def ws_endpoint(ws: WebSocket):
                     if n > 52:
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
-                    player.hand.extend(random_unique_cards(n))
+                    for r, s in random_unique_cards(n):
+                        player.hand.append(room.new_card(r, s))
 
                 elif t == "deal_all":
                     n = int(msg.get("n", 0))
@@ -487,33 +519,37 @@ async def ws_endpoint(ws: WebSocket):
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
                     for p in room.players.values():
-                        p.hand.extend(random_unique_cards(n))
+                        for r, s in random_unique_cards(n):
+                            p.hand.append(room.new_card(r, s))
 
                 elif t == "add_manual":
                     ctxt = msg.get("card", "")
-                    c = parse_card_text(ctxt)
-                    if c is None:
+                    parsed = parse_card_text(ctxt)
+                    if parsed is None:
                         await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
                         continue
-                    player.hand.append(c)
+                    r, s = parsed
+                    player.hand.append(room.new_card(r, s))
 
                 elif t == "clear_hand":
                     player.hand.clear()
 
                 elif t == "eval_selected":
-                    idxs = msg.get("idxs", [])
-                    if not isinstance(idxs, list):
-                        await ws.send_text(json.dumps({"type": "error", "message": "idxs має бути списком"}, ensure_ascii=False))
+                    card_ids = msg.get("card_ids", [])
+                    if not isinstance(card_ids, list):
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    idxs = [int(i) for i in idxs]
-                    if not (2 <= len(idxs) <= 5):
+                    card_ids = [int(x) for x in card_ids]
+                    if not (2 <= len(card_ids) <= 5):
                         await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
-                    if any(i < 0 or i >= len(player.hand) for i in idxs):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний індекс карти"}, ensure_ascii=False))
+
+                    lookup = {c.id: c for c in player.hand}
+                    if any(cid not in lookup for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
                         continue
 
-                    cards = [player.hand[i] for i in idxs]
+                    cards = [lookup[cid].as_tuple() for cid in card_ids]
                     cat, tb, label = eval_strict(cards)
 
                     await ws.send_text(json.dumps({
@@ -525,33 +561,38 @@ async def ws_endpoint(ws: WebSocket):
                     }, ensure_ascii=False))
                     continue
 
-                # play selected on a table (hidden during round)
                 elif t == "play_selected":
                     table = (msg.get("table") or "").strip()
                     if table not in TABLES:
                         await ws.send_text(json.dumps({"type": "error", "message": "Невірний стіл"}, ensure_ascii=False))
                         continue
 
-                    idxs = msg.get("idxs", [])
-                    if not isinstance(idxs, list):
-                        await ws.send_text(json.dumps({"type": "error", "message": "idxs має бути списком"}, ensure_ascii=False))
+                    card_ids = msg.get("card_ids", [])
+                    if not isinstance(card_ids, list):
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    idxs = [int(i) for i in idxs]
-                    if not (2 <= len(idxs) <= 5):
+                    card_ids = [int(x) for x in card_ids]
+                    if not (2 <= len(card_ids) <= 5):
                         await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
-                    if any(i < 0 or i >= len(player.hand) for i in idxs):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний індекс карти"}, ensure_ascii=False))
+
+                    lookup = {c.id: c for c in player.hand}
+                    if any(cid not in lookup for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
                         continue
 
-                    cards = [player.hand[i] for i in idxs]
-                    cat, tb, label = eval_strict(cards)
+                    # ✅ don’t allow reuse of same card in multiple plays in same round
+                    used = used_card_ids_in_round(room, player.pid)
+                    if any(cid in used for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Не можна використати ту саму карту двічі в одному раунді"}, ensure_ascii=False))
+                        continue
 
-                    # remove from hand
-                    for i in sorted(idxs, reverse=True):
-                        del player.hand[i]
+                    cards_tuples = [lookup[cid].as_tuple() for cid in card_ids]
+                    cat, tb, label = eval_strict(cards_tuples)
 
-                    # if player changes plays, they are no longer "ready"
+                    cards_text = [lookup[cid].as_text() for cid in card_ids]
+
+                    # if player changes plays, they are no longer ready
                     room.ready_pids.discard(player.pid)
 
                     room.play_seq += 1
@@ -561,7 +602,8 @@ async def ws_endpoint(ws: WebSocket):
                         pid=player.pid,
                         name=player.name,
                         table=table,
-                        cards=cards,
+                        card_ids=card_ids,
+                        cards_text=cards_text,
                         cat=cat,
                         tb=tb,
                         label=label,
@@ -569,22 +611,17 @@ async def ws_endpoint(ws: WebSocket):
                         placed_seq=room.play_seq,
                     ))
 
-                # ✅ soft end: vote "I'm ready"
                 elif t == "end_round_vote":
-                    # mark player ready
                     room.ready_pids.add(player.pid)
-
                     rr = maybe_finish_round(room)
                     if rr is not None:
-                        # optional one-shot message
                         for _pid, _ws in list(room.sockets.items()):
                             try:
                                 await _ws.send_text(json.dumps({"type": "round_result", "round": rr}, ensure_ascii=False))
                             except Exception:
                                 pass
 
-                # ✅ forced end (old behavior)
-                elif t == "end_round_force" or t == "end_round":
+                elif t == "end_round_force":
                     rr = resolve_round(room)
                     for _pid, _ws in list(room.sockets.items()):
                         try:
@@ -593,16 +630,18 @@ async def ws_endpoint(ws: WebSocket):
                             pass
 
                 elif t == "hints":
-                    pairs_trips_quads = find_pairs_trips_quads(player.hand)
-                    straights = find_straights_5(player.hand)
-                    flushes = find_flushes_5plus(player.hand)
+                    # hints for current hand (cards still present until round ends)
+                    hand_cards = [c.as_tuple() for c in player.hand]
+                    pq = find_pairs_trips_quads(hand_cards)
+                    straights = find_straights_5(hand_cards)
+                    flushes = find_flushes_5plus(hand_cards)
 
                     await ws.send_text(json.dumps({
                         "type": "hints_result",
                         "count": len(player.hand),
-                        "pairs": [[card_str(c) for c in x] for x in pairs_trips_quads["pairs"][:30]],
-                        "trips": [[card_str(c) for c in x] for x in pairs_trips_quads["trips"][:30]],
-                        "quads": [[card_str(c) for c in x] for x in pairs_trips_quads["quads"][:30]],
+                        "pairs": [[card_str(c) for c in x] for x in pq["pairs"][:30]],
+                        "trips": [[card_str(c) for c in x] for x in pq["trips"][:30]],
+                        "quads": [[card_str(c) for c in x] for x in pq["quads"][:30]],
                         "straights5": [[card_str(c) for c in x] for x in straights[:30]],
                         "flushes5": [[card_str(c) for c in x] for x in flushes[:30]],
                     }, ensure_ascii=False))
