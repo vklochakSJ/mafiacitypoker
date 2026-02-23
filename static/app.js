@@ -1,3 +1,4 @@
+// static/app.js
 let ws = null;
 
 const PID_KEY = "poker_pid_tab";
@@ -35,6 +36,7 @@ function setOnline(on) {
 
   el("playBtn").disabled = !on;
   el("endRoundBtn").disabled = !on;
+  el("forceEndRoundBtn").disabled = !on;
   el("tableSelect").disabled = !on;
 
   el("pickC").disabled = !on;
@@ -158,7 +160,7 @@ function setupTablesSelect(){
   }
 }
 
-/* render */
+/* render helpers */
 
 function renderMyPending(){
   const box = el("myPending");
@@ -180,7 +182,8 @@ function renderMyPending(){
     for (const p of arr){
       const line = document.createElement("div");
       line.className = "small";
-      line.textContent = `${p.cards.join(" ")} — ${p.label}`;
+      const when = (p.placed_seq !== undefined) ? `#${p.placed_seq}` : "";
+      line.textContent = `${p.cards.join(" ")} — ${p.label} ${when}`;
       wrap.appendChild(line);
     }
     box.appendChild(wrap);
@@ -213,13 +216,12 @@ function renderLastRound(){
     const sec = document.createElement("div");
     sec.className = "item";
 
-    const winners = t.winners || [];
-    const winnersText = winners.length
-      ? winners.map(w => `${w.name}: ${w.cards.join(" ")} (${w.label})`).join(" | ")
-      : "(нема)";
+    const w = t.winner;
+    const winnerText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label})` : "(нема)";
 
     sec.innerHTML = `<div><b>${t.table}</b></div>
-                     <div class="small">Переможець(ці): ${winnersText}</div>`;
+                     <div class="small">Переможець: ${winnerText}</div>
+                     <div class="small">Зіграно комбінацій: ${(t.plays||[]).length}</div>`;
     box.appendChild(sec);
   }
 }
@@ -232,7 +234,7 @@ function renderHistory(){
     return;
   }
 
-  const hist = state.battle_history.slice().reverse(); // newest first
+  const hist = state.battle_history.slice().reverse();
   for (const r of hist){
     const sec = document.createElement("div");
     sec.className = "item";
@@ -241,16 +243,33 @@ function renderHistory(){
       sec.appendChild(Object.assign(document.createElement("div"), {className:"small", textContent:"(ніхто не грав)"}));
     } else {
       for (const t of r.tables){
-        const winners = (t.winners || []).map(w => w.name).join(", ") || "(нема)";
+        const w = t.winner;
+        const wName = w ? w.name : "(нема)";
         const line = document.createElement("div");
         line.className = "small";
-        line.textContent = `${t.table}: переможець(ці) — ${winners}; зіграно комбінацій: ${(t.plays||[]).length}`;
+        line.textContent = `${t.table}: переможець — ${wName}; зіграно: ${(t.plays||[]).length}`;
         sec.appendChild(line);
       }
     }
     box.appendChild(sec);
   }
 }
+
+function renderRoundStatus(){
+  const inv = state?.involved_count ?? 0;
+  const ready = state?.ready_count ?? 0;
+  const youReady = !!state?.you_ready;
+
+  let text = "";
+  if (inv === 0) {
+    text = "У цьому раунді ще немає зіграних комбінацій (ніхто не задіяний).";
+  } else {
+    text = `Готові: ${ready}/${inv}` + (youReady ? " (ви підтвердили)" : "");
+  }
+  el("roundStatus").textContent = text;
+}
+
+/* main render */
 
 function render(){
   if (!state) return;
@@ -318,6 +337,7 @@ function render(){
   renderMyPending();
   renderLastRound();
   renderHistory();
+  renderRoundStatus();
 
   el("pid").textContent = myPid || "(нема)";
 }
@@ -373,7 +393,6 @@ function connect(){
       return;
     }
     if (msg.type === "round_result"){
-      // optional toast
       toast(`Раунд #${msg.round.round} завершено`);
       return;
     }
@@ -447,7 +466,11 @@ el("playBtn").onclick = ()=>{
 };
 
 el("endRoundBtn").onclick = ()=>{
-  send({type:"end_round"});
+  send({ type: "end_round_vote" });
+};
+
+el("forceEndRoundBtn").onclick = ()=>{
+  send({ type: "end_round_force" });
 };
 
 setOnline(false);
