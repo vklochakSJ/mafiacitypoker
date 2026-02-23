@@ -1,10 +1,11 @@
-// static/app.js
 let ws = null;
 
 const PID_KEY = "poker_pid_tab";
 let myPid = sessionStorage.getItem(PID_KEY) || "";
 let state = null;
-let selectedIdxs = new Set();
+
+// тепер вибір по id картки (а не index)
+let selectedCardIds = new Set();
 
 const el = (id) => document.getElementById(id);
 
@@ -66,7 +67,7 @@ function isRedSuit(cardTxt) {
   return cardTxt.includes("♥") || cardTxt.includes("♦");
 }
 
-/* sorting + grouping duplicates */
+/* --------------- sorting + grouping (by text, keep ids) --------------- */
 
 const RANK_VALUE = {"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"T":10,"J":11,"Q":12,"K":13,"A":14};
 const SUIT_ORDER = {"♣":1,"♦":2,"♥":3,"♠":4};
@@ -74,7 +75,7 @@ const SUIT_ORDER = {"♣":1,"♦":2,"♥":3,"♠":4};
 function rankOf(cardTxt){ return RANK_VALUE[cardTxt[0]] || 0; }
 function suitOf(cardTxt){ return cardTxt[cardTxt.length - 1]; }
 
-function sortCards(arr){
+function sortCardTexts(arr){
   return (arr || []).slice().sort((a,b)=>{
     const ra = rankOf(a), rb = rankOf(b);
     if (ra !== rb) return ra - rb;
@@ -84,26 +85,18 @@ function sortCards(arr){
   });
 }
 
-function groupHand(hand){
-  const sorted = sortCards(hand);
-  const map = new Map();
-  for (let i=0;i<(hand||[]).length;i++){
-    const c = hand[i];
-    if (!map.has(c)) map.set(c, []);
-    map.get(c).push(i);
+// handObjs: [{id, c}, ...]
+function groupHand(handObjs){
+  const byText = new Map(); // c -> [ids]
+  for (const obj of (handObjs || [])){
+    if (!byText.has(obj.c)) byText.set(obj.c, []);
+    byText.get(obj.c).push(obj.id);
   }
-  const out = [];
-  const seen = new Set();
-  for (const c of sorted){
-    if (seen.has(c)) continue;
-    seen.add(c);
-    const idxs = map.get(c) || [];
-    out.push({ card:c, count: idxs.length, indices: idxs });
-  }
-  return out;
+  const sortedTexts = sortCardTexts([...byText.keys()]);
+  return sortedTexts.map(c => ({ card: c, ids: byText.get(c) || [] }));
 }
 
-/* auto hints */
+/* ------------------ auto hints ------------------ */
 
 let hintsTimer = null;
 function requestHintsSoon(){
@@ -112,7 +105,7 @@ function requestHintsSoon(){
   hintsTimer = setTimeout(()=> send({type:"hints"}), 120);
 }
 
-/* suit dropdowns */
+/* ------------------ suit dropdowns ------------------ */
 
 const RANKS_DESC = ["A","K","Q","J","T","9","8","7","6","5","4","3","2"];
 function fillSuitSelect(selectEl){
@@ -143,7 +136,7 @@ function setupSuitPickers(){
   pickS.onchange = () => onPick("♠", pickS);
 }
 
-/* tables select */
+/* ------------------ tables select ------------------ */
 
 function setupTablesSelect(){
   const sel = el("tableSelect");
@@ -160,7 +153,50 @@ function setupTablesSelect(){
   }
 }
 
-/* render helpers */
+/* ------------------ render blocks ------------------ */
+
+function renderOpponents(){
+  const box = el("opponentHands");
+  box.innerHTML = "";
+  if (!state) return;
+
+  const opps = state.players.filter(p => p.pid !== myPid);
+  if (!opps.length){
+    box.innerHTML = `<div class="small">(поки що немає опонентів)</div>`;
+    return;
+  }
+
+  for (const p of opps){
+    const wrap = document.createElement("div");
+    wrap.className = "opponent";
+
+    const title = document.createElement("div");
+    title.className = "opponent-name";
+    title.textContent = p.name;
+
+    const cards = document.createElement("div");
+    cards.className = "opponent-cards";
+
+    const groups = groupHand(p.hand || []);
+    for (const g of groups){
+      const cb = document.createElement("div");
+      cb.className = "cardbtn" + (isRedSuit(g.card) ? " red" : "");
+      cb.textContent = g.card;
+
+      if (g.ids.length > 1){
+        const badge = document.createElement("div");
+        badge.className = "badge";
+        badge.textContent = String(g.ids.length);
+        cb.appendChild(badge);
+      }
+      cards.appendChild(cb);
+    }
+
+    wrap.appendChild(title);
+    wrap.appendChild(cards);
+    box.appendChild(wrap);
+  }
+}
 
 function renderMyPending(){
   const box = el("myPending");
@@ -269,12 +305,12 @@ function renderRoundStatus(){
   el("roundStatus").textContent = text;
 }
 
-/* main render */
+/* ------------------ main render ------------------ */
 
 function render(){
   if (!state) return;
 
-  // players
+  // players list
   const playersDiv = el("players");
   playersDiv.innerHTML = "";
   state.players.forEach(p=>{
@@ -285,55 +321,58 @@ function render(){
     playersDiv.appendChild(d);
   });
 
-  // tables select
   setupTablesSelect();
 
-  // my hand grouped
+  // my hand (grouped by text, keep ids, selection cycles)
   const me = meFromState();
   const handDiv = el("hand");
   handDiv.innerHTML = "";
 
   if (me){
-    selectedIdxs = new Set([...selectedIdxs].filter(i=> i>=0 && i<me.hand.length));
-    const groups = groupHand(me.hand);
+    const myHand = me.hand || [];
+    const myIds = new Set(myHand.map(x => x.id));
+    selectedCardIds = new Set([...selectedCardIds].filter(id => myIds.has(id)));
 
-    groups.forEach(g=>{
+    const groups = groupHand(myHand);
+    for (const g of groups){
+      const selCount = g.ids.filter(id => selectedCardIds.has(id)).length;
+
       const b = document.createElement("div");
-      const selCount = g.indices.filter(i => selectedIdxs.has(i)).length;
-
       b.className = "cardbtn"
         + (isRedSuit(g.card) ? " red" : "")
         + (selCount>0 ? " selected" : "");
       b.textContent = g.card;
 
-      if (g.count>1){
+      if (g.ids.length > 1){
         const badge = document.createElement("div");
         badge.className = "badge";
-        badge.textContent = String(g.count);
+        badge.textContent = String(g.ids.length);
         b.appendChild(badge);
       }
-      if (selCount>0){
+      if (selCount > 0){
         const badge2 = document.createElement("div");
         badge2.className = "badge2";
-        badge2.textContent = g.count>1 ? `${selCount}/${g.count}` : `${selCount}`;
+        badge2.textContent = g.ids.length > 1 ? `${selCount}/${g.ids.length}` : `${selCount}`;
         b.appendChild(badge2);
       }
 
+      // click cycles 0 -> 1 -> ... -> N -> 0 (by ids)
       b.onclick = ()=>{
-        const selectedHere = g.indices.filter(i => selectedIdxs.has(i));
-        if (selectedHere.length < g.count){
-          const next = g.indices.find(i => !selectedIdxs.has(i));
-          if (next !== undefined) selectedIdxs.add(next);
+        const selectedHere = g.ids.filter(id => selectedCardIds.has(id));
+        if (selectedHere.length < g.ids.length){
+          const next = g.ids.find(id => !selectedCardIds.has(id));
+          if (next !== undefined) selectedCardIds.add(next);
         } else {
-          g.indices.forEach(i => selectedIdxs.delete(i));
+          g.ids.forEach(id => selectedCardIds.delete(id));
         }
         render();
       };
 
       handDiv.appendChild(b);
-    });
+    }
   }
 
+  renderOpponents();
   renderMyPending();
   renderLastRound();
   renderHistory();
@@ -342,7 +381,7 @@ function render(){
   el("pid").textContent = myPid || "(нема)";
 }
 
-/* connect */
+/* ------------------ connect ------------------ */
 
 function connect(){
   if (ws) return;
@@ -420,10 +459,10 @@ function disconnect(){
   setOnline(false);
 }
 
-/* actions */
+/* ------------------ actions ------------------ */
 
-function selectedIdxList(){
-  return Array.from(selectedIdxs).sort((a,b)=>a-b);
+function selectedIdList(){
+  return Array.from(selectedCardIds);
 }
 
 el("connectBtn").onclick = connect;
@@ -447,22 +486,25 @@ el("dealAllBtn").onclick = ()=>{
   send({type:"deal_all", n});
 };
 
-el("clearHandBtn").onclick = ()=> send({type:"clear_hand"});
+el("clearHandBtn").onclick = ()=> {
+  selectedCardIds.clear();
+  send({type:"clear_hand"});
+};
 
 el("evalBtn").onclick = ()=>{
-  const idxs = selectedIdxList();
-  send({type:"eval_selected", idxs});
+  const ids = selectedIdList();
+  send({type:"eval_selected", card_ids: ids});
 };
 
 el("playBtn").onclick = ()=>{
-  const idxs = selectedIdxList();
+  const ids = selectedIdList();
   const table = el("tableSelect").value;
   if (!table){
     toast("Оберіть стіл");
     return;
   }
-  send({type:"play_selected", idxs, table});
-  selectedIdxs.clear();
+  send({type:"play_selected", card_ids: ids, table});
+  selectedCardIds.clear();
 };
 
 el("endRoundBtn").onclick = ()=>{
@@ -472,6 +514,8 @@ el("endRoundBtn").onclick = ()=>{
 el("forceEndRoundBtn").onclick = ()=>{
   send({ type: "end_round_force" });
 };
+
+/* ------------------ init ------------------ */
 
 setOnline(false);
 ensurePid();
