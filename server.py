@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import random
 import itertools
 import time
@@ -10,17 +11,88 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+import psycopg
 
-# ------------------ Tables ------------------
+
+# ===================== PostgreSQL persistence =====================
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+ROOM_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS room_state (
+  room_id TEXT PRIMARY KEY,
+  state   JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+UPSERT_SQL = """
+INSERT INTO room_state (room_id, state, updated_at)
+VALUES (%s, %s::jsonb, now())
+ON CONFLICT (room_id)
+DO UPDATE SET state = EXCLUDED.state, updated_at = now();
+"""
+
+SELECT_SQL = "SELECT state FROM room_state WHERE room_id=%s;"
+
+
+def _db_connect():
+    # psycopg understands sslmode in DATABASE_URL (e.g. ?sslmode=require)
+    return psycopg.connect(DATABASE_URL, autocommit=True)
+
+
+def _db_init_sync():
+    if not DATABASE_URL:
+        return
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(ROOM_TABLE_SQL)
+
+
+def _db_load_room_sync(room_id: str) -> Optional[dict]:
+    if not DATABASE_URL:
+        return None
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(SELECT_SQL, (room_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            state = row[0]
+            # psycopg may return dict already for jsonb, but handle both
+            if isinstance(state, str):
+                return json.loads(state)
+            return state
+
+
+def _db_save_room_sync(room_id: str, state: dict) -> None:
+    if not DATABASE_URL:
+        return
+    payload = json.dumps(state, ensure_ascii=False)
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(UPSERT_SQL, (room_id, payload))
+
+
+async def db_init():
+    await asyncio.to_thread(_db_init_sync)
+
+
+async def db_load_room(room_id: str) -> Optional[dict]:
+    return await asyncio.to_thread(_db_load_room_sync, room_id)
+
+
+async def db_save_room(room_id: str, state: dict) -> None:
+    await asyncio.to_thread(_db_save_room_sync, room_id, state)
+
+
+# ===================== Game constants =====================
 
 TABLES = [
     "МІДТАУН","ФЕЛБЛОК","ГАРЛЕМ","РІВЕРСАЙД","ОКСМІР","ІНДЕЙЛ","ХАРБОР","ХІЛЛФОРД","БРАЙТОН","ЯРВІК",
     "ХАЙТС","ГРЕЙРОК","НОРТБРІДЖ","БЕЙСАЙД","КРОСБІ","ІСТ-ТАУН","САУЗБРІДЖ","ГРІНВЕЙ","ТОРВІК","ДАУНТАУН",
     "БРУКЛІН","ЛІБЕРТІ","ЕШПАРК","СОХО","ВЕСТ-САЙД","АЙРОНХІЛЛ","САУЗГЕЙТ","ФЕЙРМОНТ","ХАЙЛЕНД","ТВІНС",
 ]
-
-
-# ------------------ Cards / Evaluation ------------------
 
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
 SUITS = ["♣", "♦", "♥", "♠"]
@@ -47,14 +119,8 @@ CAT_2 = {"HIGH": 1, "PAIR": 2}
 CAT_3 = {"HIGH": 1, "PAIR": 2, "TRIPS": 3, "FLUSH": 4, "STRAIGHT": 5}
 CAT_4 = {"HIGH": 1, "PAIR": 2, "TWO_PAIR": 3, "TRIPS": 4, "FLUSH": 5, "STRAIGHT": 6, "QUADS": 7}
 CAT_5 = {
-    "HIGH": 1,
-    "PAIR": 2,
-    "TWO_PAIR": 3,
-    "TRIPS": 4,
-    "STRAIGHT": 5,
-    "FLUSH": 6,
-    "FULL_HOUSE": 7,
-    "QUADS": 8,
+    "HIGH": 1, "PAIR": 2, "TWO_PAIR": 3, "TRIPS": 4,
+    "STRAIGHT": 5, "FLUSH": 6, "FULL_HOUSE": 7, "QUADS": 8,
     "STRAIGHT_FLUSH": 9,
 }
 
@@ -150,8 +216,6 @@ def eval_strict(cards: List[Tuple[str, str]]) -> Tuple[int, Tuple[int, ...], str
     return CAT_5["HIGH"], tuple(sorted(values, reverse=True)), "Старша карта"
 
 
-# ------------------ Hints ------------------
-
 def find_pairs_trips_quads(hand_cards: List[Tuple[str, str]]) -> Dict[str, List[List[Tuple[str, str]]]]:
     by_rank: Dict[str, List[Tuple[str, str]]] = {}
     for c in hand_cards:
@@ -200,7 +264,7 @@ def find_flushes_5plus(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str
     return out
 
 
-# ------------------ Room / Players / Card instances ------------------
+# ===================== Models =====================
 
 @dataclass
 class CardInst:
@@ -216,6 +280,14 @@ class CardInst:
 
     def to_json(self) -> Dict[str, Any]:
         return {"id": self.id, "c": self.as_text()}
+
+    @staticmethod
+    def from_json(d: Dict[str, Any]) -> "CardInst":
+        cid = int(d["id"])
+        c = d.get("c") or ""
+        rank = c[:-1]
+        suit = c[-1:]
+        return CardInst(id=cid, rank=rank, suit=suit)
 
 
 @dataclass
@@ -253,7 +325,23 @@ class Play:
             "label": self.label,
             "placed_ms": self.placed_ms,
             "placed_seq": self.placed_seq,
+            "card_ids": list(self.card_ids),
         }
+
+    @staticmethod
+    def from_json(d: Dict[str, Any]) -> "Play":
+        return Play(
+            pid=d["pid"],
+            name=d["name"],
+            table=d["table"],
+            card_ids=[int(x) for x in d.get("card_ids", [])],
+            cards_text=list(d.get("cards", [])),
+            cat=int(d["cat"]),
+            tb=tuple(int(x) for x in d.get("tb", [])),
+            label=d["label"],
+            placed_ms=int(d.get("placed_ms", 0)),
+            placed_seq=int(d.get("placed_seq", 0)),
+        )
 
 
 @dataclass
@@ -269,7 +357,6 @@ class Room:
 
     ready_pids: Set[str] = field(default_factory=set)
     play_seq: int = 0
-
     next_card_id: int = 1
 
     def can_join(self) -> bool:
@@ -281,25 +368,10 @@ class Room:
         return CardInst(id=cid, rank=rank, suit=suit)
 
 
+# ===================== In-memory rooms cache =====================
+
 ROOMS: Dict[str, Room] = {}
-
-
-def get_room(room_id: str) -> Room:
-    if room_id not in ROOMS:
-        ROOMS[room_id] = Room(room_id=room_id)
-    return ROOMS[room_id]
-
-
-def random_unique_cards(n: int) -> List[Tuple[str, str]]:
-    if n < 0:
-        raise ValueError("N має бути ≥ 0")
-    if n > 52:
-        raise ValueError("За одну роздачу максимум 52 унікальні карти")
-    deck = [(r, s) for r in RANKS for s in SUITS]
-    batch = random.sample(deck, n)
-    if len(set(batch)) != len(batch):
-        raise RuntimeError("ПОМИЛКА: дубль у межах однієї роздачі")
-    return batch
+ROOMS_LOCK = asyncio.Lock()
 
 
 def parse_card_text(t: str) -> Optional[Tuple[str, str]]:
@@ -324,6 +396,15 @@ def parse_card_text(t: str) -> Optional[Tuple[str, str]]:
     return (rank, suit)
 
 
+def random_unique_cards(n: int) -> List[Tuple[str, str]]:
+    if n < 0:
+        raise ValueError("N має бути ≥ 0")
+    if n > 52:
+        raise ValueError("За одну роздачу максимум 52 унікальні карти")
+    deck = [(r, s) for r in RANKS for s in SUITS]
+    return random.sample(deck, n)
+
+
 def involved_pids(room: Room) -> Set[str]:
     s: Set[str] = set()
     for t in TABLES:
@@ -341,13 +422,90 @@ def used_card_ids_in_round(room: Room, pid: str) -> Set[int]:
     return used
 
 
+# ===================== Room <-> JSON state =====================
+
+def room_to_state(room: Room) -> Dict[str, Any]:
+    players = []
+    for p in room.players.values():
+        players.append({
+            "pid": p.pid,
+            "name": p.name,
+            "hand": [c.to_json() for c in p.hand],
+            "archive": p.archive,
+        })
+
+    pending = {}
+    for t in TABLES:
+        pending[t] = [pl.to_public() for pl in room.pending.get(t, [])]
+
+    return {
+        "room_id": room.room_id,
+        "round_no": room.round_no,
+        "play_seq": room.play_seq,
+        "next_card_id": room.next_card_id,
+        "ready_pids": list(room.ready_pids),
+        "players": players,
+        "pending": pending,
+        "battle_history": room.battle_history,
+        "tables": TABLES,
+    }
+
+
+def room_from_state(room_id: str, st: Dict[str, Any]) -> Room:
+    r = Room(room_id=room_id)
+    r.round_no = int(st.get("round_no", 0))
+    r.play_seq = int(st.get("play_seq", 0))
+    r.next_card_id = int(st.get("next_card_id", 1))
+    r.ready_pids = set(st.get("ready_pids", []))
+    r.battle_history = list(st.get("battle_history", []))
+
+    # players
+    for pd in st.get("players", []):
+        p = Player(pid=pd["pid"], name=pd.get("name", "Гравець"))
+        p.archive = list(pd.get("archive", []))
+        p.hand = [CardInst.from_json(x) for x in pd.get("hand", [])]
+        r.players[p.pid] = p
+
+    # pending
+    r.pending = {t: [] for t in TABLES}
+    pend = st.get("pending", {}) or {}
+    for t in TABLES:
+        for pl in pend.get(t, []) or []:
+            r.pending[t].append(Play.from_json(pl))
+
+    return r
+
+
+async def get_room(room_id: str) -> Room:
+    async with ROOMS_LOCK:
+        if room_id in ROOMS:
+            return ROOMS[room_id]
+
+        # try load from DB
+        st = await db_load_room(room_id)
+        if st is not None:
+            room = room_from_state(room_id, st)
+        else:
+            room = Room(room_id=room_id)
+
+        ROOMS[room_id] = room
+        return room
+
+
+async def persist_room(room: Room) -> None:
+    # Store only data (no sockets)
+    await db_save_room(room.room_id, room_to_state(room))
+
+
+# ===================== Snapshots / Broadcast =====================
+
 def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
     plist = []
     for p in room.players.values():
         plist.append({
             "pid": p.pid,
             "name": p.name,
-            "hand": [c.to_json() for c in p.hand],  # ✅ now objects {id,c}
+            "hand": [c.to_json() for c in p.hand],
             "archive": p.archive,
         })
 
@@ -365,11 +523,9 @@ def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
         "tables": TABLES,
         "round_no": room.round_no,
         "players": plist,
-
         "my_pending": my_pending,
         "last_round": last_round,
         "battle_history": room.battle_history[-20:],
-
         "involved_count": len(inv),
         "ready_count": len(inv.intersection(room.ready_pids)),
         "you_ready": (viewer_pid in room.ready_pids),
@@ -388,13 +544,13 @@ async def broadcast(room: Room) -> None:
         room.sockets.pop(pid, None)
 
 
+# ===================== Round resolution =====================
+
 def resolve_round(room: Room) -> Dict[str, Any]:
     room.round_no += 1
     round_id = room.round_no
 
     tables_out: List[Dict[str, Any]] = []
-
-    # collect all played card ids per pid -> remove after round end
     remove_by_pid: Dict[str, Set[int]] = {}
 
     for t in TABLES:
@@ -417,7 +573,7 @@ def resolve_round(room: Room) -> Dict[str, Any]:
         for p in plays:
             remove_by_pid.setdefault(p.pid, set()).update(p.card_ids)
 
-    # ✅ remove cards from hands ONLY NOW (after round end)
+    # remove cards from hands ONLY after round end
     for pid, ids in remove_by_pid.items():
         if pid not in room.players:
             continue
@@ -429,6 +585,7 @@ def resolve_round(room: Room) -> Dict[str, Any]:
 
     room.pending = {t: [] for t in TABLES}
     room.ready_pids.clear()
+
     return round_rec
 
 
@@ -441,10 +598,15 @@ def maybe_finish_round(room: Room) -> Optional[Dict[str, Any]]:
     return None
 
 
-# ------------------ FastAPI ------------------
+# ===================== FastAPI =====================
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.on_event("startup")
+async def _startup():
+    await db_init()
 
 
 @app.get("/")
@@ -471,7 +633,7 @@ async def ws_endpoint(ws: WebSocket):
         name = (msg.get("name") or "Гравець").strip()[:20]
         pid = (msg.get("pid") or "").strip() or f"p{random.randint(100000, 999999)}"
 
-        room = get_room(room_id)
+        room = await get_room(room_id)
 
         async with room.lock:
             if pid not in room.players:
@@ -484,6 +646,9 @@ async def ws_endpoint(ws: WebSocket):
 
             room.sockets[pid] = ws
 
+            # save on join (names/players persist)
+            await persist_room(room)
+
         await ws.send_text(json.dumps({"type": "joined", "pid": pid, "room": room_id}, ensure_ascii=False))
 
         async with room.lock:
@@ -493,6 +658,9 @@ async def ws_endpoint(ws: WebSocket):
             raw = await ws.receive_text()
             msg = json.loads(raw)
             t = msg.get("type")
+
+            needs_save = False
+            one_shot_round: Optional[dict] = None
 
             async with room.lock:
                 if pid not in room.players:
@@ -507,8 +675,9 @@ async def ws_endpoint(ws: WebSocket):
                     if n > 52:
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
-                    for r, s in random_unique_cards(n):
-                        player.hand.append(room.new_card(r, s))
+                    for r_, s_ in random_unique_cards(n):
+                        player.hand.append(room.new_card(r_, s_))
+                    needs_save = True
 
                 elif t == "deal_all":
                     n = int(msg.get("n", 0))
@@ -519,8 +688,9 @@ async def ws_endpoint(ws: WebSocket):
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
                     for p in room.players.values():
-                        for r, s in random_unique_cards(n):
-                            p.hand.append(room.new_card(r, s))
+                        for r_, s_ in random_unique_cards(n):
+                            p.hand.append(room.new_card(r_, s_))
+                    needs_save = True
 
                 elif t == "add_manual":
                     ctxt = msg.get("card", "")
@@ -528,11 +698,13 @@ async def ws_endpoint(ws: WebSocket):
                     if parsed is None:
                         await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
                         continue
-                    r, s = parsed
-                    player.hand.append(room.new_card(r, s))
+                    r_, s_ = parsed
+                    player.hand.append(room.new_card(r_, s_))
+                    needs_save = True
 
                 elif t == "clear_hand":
                     player.hand.clear()
+                    needs_save = True
 
                 elif t == "eval_selected":
                     card_ids = msg.get("card_ids", [])
@@ -559,7 +731,7 @@ async def ws_endpoint(ws: WebSocket):
                         "cat": cat,
                         "tb": tb,
                     }, ensure_ascii=False))
-                    continue
+                    continue  # no save
 
                 elif t == "play_selected":
                     table = (msg.get("table") or "").strip()
@@ -581,7 +753,6 @@ async def ws_endpoint(ws: WebSocket):
                         await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
                         continue
 
-                    # ✅ don’t allow reuse of same card in multiple plays in same round
                     used = used_card_ids_in_round(room, player.pid)
                     if any(cid in used for cid in card_ids):
                         await ws.send_text(json.dumps({"type": "error", "message": "Не можна використати ту саму карту двічі в одному раунді"}, ensure_ascii=False))
@@ -589,10 +760,8 @@ async def ws_endpoint(ws: WebSocket):
 
                     cards_tuples = [lookup[cid].as_tuple() for cid in card_ids]
                     cat, tb, label = eval_strict(cards_tuples)
-
                     cards_text = [lookup[cid].as_text() for cid in card_ids]
 
-                    # if player changes plays, they are no longer ready
                     room.ready_pids.discard(player.pid)
 
                     room.play_seq += 1
@@ -611,26 +780,20 @@ async def ws_endpoint(ws: WebSocket):
                         placed_seq=room.play_seq,
                     ))
 
+                    needs_save = True
+
                 elif t == "end_round_vote":
                     room.ready_pids.add(player.pid)
                     rr = maybe_finish_round(room)
                     if rr is not None:
-                        for _pid, _ws in list(room.sockets.items()):
-                            try:
-                                await _ws.send_text(json.dumps({"type": "round_result", "round": rr}, ensure_ascii=False))
-                            except Exception:
-                                pass
+                        one_shot_round = rr
+                        needs_save = True
 
                 elif t == "end_round_force":
-                    rr = resolve_round(room)
-                    for _pid, _ws in list(room.sockets.items()):
-                        try:
-                            await _ws.send_text(json.dumps({"type": "round_result", "round": rr}, ensure_ascii=False))
-                        except Exception:
-                            pass
+                    one_shot_round = resolve_round(room)
+                    needs_save = True
 
                 elif t == "hints":
-                    # hints for current hand (cards still present until round ends)
                     hand_cards = [c.as_tuple() for c in player.hand]
                     pq = find_pairs_trips_quads(hand_cards)
                     straights = find_straights_5(hand_cards)
@@ -645,7 +808,7 @@ async def ws_endpoint(ws: WebSocket):
                         "straights5": [[card_str(c) for c in x] for x in straights[:30]],
                         "flushes5": [[card_str(c) for c in x] for x in flushes[:30]],
                     }, ensure_ascii=False))
-                    continue
+                    continue  # no save
 
                 elif t == "leave":
                     break
@@ -653,6 +816,18 @@ async def ws_endpoint(ws: WebSocket):
                 else:
                     await ws.send_text(json.dumps({"type": "error", "message": f"Невідомий тип повідомлення: {t}"}, ensure_ascii=False))
                     continue
+
+                # Persist changes (only when needed)
+                if needs_save:
+                    await persist_room(room)
+
+                # One-shot round_result (optional)
+                if one_shot_round is not None:
+                    for _pid, _ws in list(room.sockets.items()):
+                        try:
+                            await _ws.send_text(json.dumps({"type": "round_result", "round": one_shot_round}, ensure_ascii=False))
+                        except Exception:
+                            pass
 
                 await broadcast(room)
 
@@ -662,4 +837,6 @@ async def ws_endpoint(ws: WebSocket):
         if room is not None and pid is not None:
             async with room.lock:
                 room.sockets.pop(pid, None)
+                # Save (optional) so names/players survive
+                await persist_room(room)
                 await broadcast(room)
