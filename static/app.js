@@ -4,7 +4,6 @@ const PID_KEY = "poker_pid_tab";
 let myPid = sessionStorage.getItem(PID_KEY) || "";
 let state = null;
 
-// тепер вибір по id картки (а не index)
 let selectedCardIds = new Set();
 
 const el = (id) => document.getElementById(id);
@@ -33,6 +32,7 @@ function setOnline(on) {
   el("dealMeBtn").disabled = !on;
   el("dealAllBtn").disabled = !on;
   el("clearHandBtn").disabled = !on;
+  el("removeSelectedBtn").disabled = !on;
   el("evalBtn").disabled = !on;
 
   el("playBtn").disabled = !on;
@@ -310,7 +310,6 @@ function renderRoundStatus(){
 function render(){
   if (!state) return;
 
-  // players list
   const playersDiv = el("players");
   playersDiv.innerHTML = "";
   state.players.forEach(p=>{
@@ -323,7 +322,6 @@ function render(){
 
   setupTablesSelect();
 
-  // my hand (grouped by text, keep ids, selection cycles)
   const me = meFromState();
   const handDiv = el("hand");
   handDiv.innerHTML = "";
@@ -356,7 +354,6 @@ function render(){
         b.appendChild(badge2);
       }
 
-      // click cycles 0 -> 1 -> ... -> N -> 0 (by ids)
       b.onclick = ()=>{
         const selectedHere = g.ids.filter(id => selectedCardIds.has(id));
         if (selectedHere.length < g.ids.length){
@@ -489,6 +486,16 @@ el("dealAllBtn").onclick = ()=>{
 el("clearHandBtn").onclick = ()=> {
   selectedCardIds.clear();
   send({type:"clear_hand"});
+};
+
+el("removeSelectedBtn").onclick = ()=>{
+  const ids = selectedIdList();
+  if (!ids.length){
+    toast("Спочатку виберіть карти для видалення");
+    return;
+  }
+  send({ type:"remove_selected", card_ids: ids });
+  selectedCardIds.clear();
 };
 
 el("evalBtn").onclick = ()=>{
