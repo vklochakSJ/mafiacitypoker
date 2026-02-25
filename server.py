@@ -39,20 +39,14 @@ SELECT_SQL = "SELECT state FROM room_state WHERE room_id=%s;"
 
 
 def _prefer_ipv4_database_url(url: str) -> str:
-    """
-    If host resolves to both AAAA and A, force using IPv4 address in URL.
-    This helps on platforms without IPv6 egress.
-    """
     if not url:
         return url
-
     try:
         p = urlparse(url)
         host = p.hostname
         if not host:
             return url
 
-        # Try resolve IPv4
         ipv4 = None
         try:
             infos = socket.getaddrinfo(host, p.port or 5432, family=socket.AF_INET, type=socket.SOCK_STREAM)
@@ -64,7 +58,6 @@ def _prefer_ipv4_database_url(url: str) -> str:
         if not ipv4:
             return url
 
-        # Rebuild netloc: keep username/password, replace host, keep port
         userinfo = ""
         if p.username:
             userinfo += p.username
@@ -75,7 +68,6 @@ def _prefer_ipv4_database_url(url: str) -> str:
         port = f":{p.port}" if p.port else ""
         netloc = f"{userinfo}{ipv4}{port}"
 
-        # Preserve scheme/path/query/fragment
         new_p = ParseResult(
             scheme=p.scheme,
             netloc=netloc,
@@ -90,15 +82,10 @@ def _prefer_ipv4_database_url(url: str) -> str:
 
 
 def _db_connect():
-    # Force IPv4 if possible
     url = _prefer_ipv4_database_url(DATABASE_URL)
-    # Make sure sslmode=require exists for Supabase-like providers (if not already in URL)
-    # (If user already has sslmode in query, we keep it.)
     if url and "sslmode=" not in url:
         joiner = "&" if "?" in url else "?"
         url = url + f"{joiner}sslmode=require"
-
-    # psycopg connect
     return psycopg.connect(url, autocommit=True)
 
 
@@ -137,7 +124,6 @@ def _db_save_room_sync(room_id: str, state: dict) -> None:
 
 
 async def db_init():
-    # IMPORTANT: do not crash app if DB unreachable
     if not DATABASE_URL:
         return
     try:
@@ -743,6 +729,38 @@ async def ws_endpoint(ws: WebSocket):
 
                 elif t == "clear_hand":
                     player.hand.clear()
+                    needs_save = True
+
+                # ✅ NEW: delete selected cards from hand
+                elif t == "remove_selected":
+                    card_ids = msg.get("card_ids", [])
+                    if not isinstance(card_ids, list):
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
+                        continue
+                    card_ids = [int(x) for x in card_ids]
+                    if not card_ids:
+                        continue
+
+                    used = used_card_ids_in_round(room, player.pid)
+                    if any(cid in used for cid in card_ids):
+                        await ws.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Не можна видаляти карту, яка вже використана у комбінації поточного раунду"
+                        }, ensure_ascii=False))
+                        continue
+
+                    before = len(player.hand)
+                    to_remove = set(card_ids)
+                    player.hand = [c for c in player.hand if c.id not in to_remove]
+                    after = len(player.hand)
+
+                    if after == before:
+                        await ws.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Вибраних карт уже немає в руці"
+                        }, ensure_ascii=False))
+                        continue
+
                     needs_save = True
 
                 elif t == "eval_selected":
