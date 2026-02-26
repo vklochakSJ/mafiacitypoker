@@ -462,14 +462,6 @@ def random_unique_cards(n: int) -> List[Tuple[str, str]]:
     return random.sample(deck, n)
 
 
-def involved_pids(room: Room) -> Set[str]:
-    s: Set[str] = set()
-    for t in TABLES:
-        for p in room.pending.get(t, []):
-            s.add(p.pid)
-    return s
-
-
 def used_card_ids_in_round(room: Room, pid: str) -> Set[int]:
     used: Set[int] = set()
     for t in TABLES:
@@ -477,6 +469,10 @@ def used_card_ids_in_round(room: Room, pid: str) -> Set[int]:
             if play.pid == pid:
                 used.update(play.card_ids)
     return used
+
+
+def active_pids(room: Room) -> Set[str]:
+    return set(room.sockets.keys())
 
 
 def room_to_state(room: Room) -> Dict[str, Any]:
@@ -553,7 +549,7 @@ def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
             if play.pid == viewer_pid:
                 my_pending[t].append(play.to_public())
 
-    inv = involved_pids(room)
+    act = active_pids(room)
     last_round = room.battle_history[-1] if room.battle_history else None
 
     return {
@@ -564,8 +560,10 @@ def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
         "my_pending": my_pending,
         "last_round": last_round,
         "battle_history": room.battle_history[-20:],
-        "involved_count": len(inv),
-        "ready_count": len(inv.intersection(room.ready_pids)),
+
+        # ✅ NEW: readiness is based on active players
+        "active_count": len(act),
+        "ready_count": len(act.intersection(room.ready_pids)),
         "you_ready": (viewer_pid in room.ready_pids),
     }
 
@@ -599,7 +597,7 @@ def resolve_round(room: Room) -> Dict[str, Any]:
 
         tables_out.append({
             "table": t,
-            "plays": [p.to_public() for p in plays],
+            "plays": [p.to_public() for p in plays],   # ✅ keep all plays
             "winner": winner.to_public(),
         })
 
@@ -621,10 +619,11 @@ def resolve_round(room: Room) -> Dict[str, Any]:
 
 
 def maybe_finish_round(room: Room) -> Optional[Dict[str, Any]]:
-    inv = involved_pids(room)
-    if not inv:
+    # ✅ NEW: requires ALL active players to vote
+    act = active_pids(room)
+    if not act:
         return None
-    if inv.issubset(room.ready_pids):
+    if act.issubset(room.ready_pids):
         return resolve_round(room)
     return None
 
@@ -662,7 +661,6 @@ async def ws_endpoint(ws: WebSocket):
         name = (msg.get("name") or "").strip()
         pid = (msg.get("pid") or "").strip()
 
-        # ✅ must be fixed player
         if pid not in FIXED_SET or name not in FIXED_SET or pid != name:
             await ws.send_text(json.dumps({"type": "error", "message": "Оберіть гравця: Леви/Тигри/Ворони/Акули/Змії/Вовки"}, ensure_ascii=False))
             return
@@ -670,7 +668,6 @@ async def ws_endpoint(ws: WebSocket):
         room = await get_room(room_id)
 
         async with room.lock:
-            # if new fixed player
             if pid not in room.players:
                 if not room.can_join_new_player():
                     await ws.send_text(json.dumps({"type": "error", "message": "Кімната заповнена (6 гравців)"}, ensure_ascii=False))
@@ -679,7 +676,6 @@ async def ws_endpoint(ws: WebSocket):
             else:
                 room.players[pid].name = name
 
-            # if same player reconnects, kick previous socket
             old = room.sockets.get(pid)
             if old is not None and old != ws:
                 try:
@@ -688,6 +684,10 @@ async def ws_endpoint(ws: WebSocket):
                     pass
 
             room.sockets[pid] = ws
+
+            # ✅ when someone connects, they are NOT ready by default
+            room.ready_pids.discard(pid)
+
             await persist_room(room)
 
         await ws.send_text(json.dumps({"type": "joined", "pid": pid, "room": room_id}, ensure_ascii=False))
@@ -716,7 +716,8 @@ async def ws_endpoint(ws: WebSocket):
                     if n > 52:
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
-                    for r_, s_ in random_unique_cards(n):
+                    deck = [(r, s) for r in RANKS for s in SUITS]
+                    for r_, s_ in random.sample(deck, n):
                         player.hand.append(room.new_card(r_, s_))
                     needs_save = True
 
@@ -728,8 +729,9 @@ async def ws_endpoint(ws: WebSocket):
                     if n > 52:
                         await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
                         continue
+                    deck = [(r, s) for r in RANKS for s in SUITS]
                     for p in room.players.values():
-                        for r_, s_ in random_unique_cards(n):
+                        for r_, s_ in random.sample(deck, n):
                             p.hand.append(room.new_card(r_, s_))
                     needs_save = True
 
@@ -910,5 +912,7 @@ async def ws_endpoint(ws: WebSocket):
         if room is not None and pid is not None:
             async with room.lock:
                 room.sockets.pop(pid, None)
+                # ✅ якщо хтось відвалився — його "готовність" скидаємо
+                room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
