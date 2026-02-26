@@ -1,6 +1,3 @@
-/* static/style.css */
-
-/* ---------- Base ---------- */
 :root{
   --bg: #0b1020;
   --panel: rgba(255,255,255,0.06);
@@ -31,7 +28,6 @@ body{
               var(--bg);
 }
 
-/* ---------- Header ---------- */
 header{
   padding: 18px 18px 6px;
   max-width: 1200px;
@@ -44,7 +40,6 @@ header h1{
   letter-spacing: 0.2px;
 }
 
-/* ---------- Layout ---------- */
 .card{
   background: var(--panel);
   border: 1px solid var(--border);
@@ -62,21 +57,19 @@ header h1{
   gap: var(--gap);
 }
 
-/* top connection card spans full */
 body > section.card{
   max-width: 1200px;
   margin: 8px auto 0;
 }
 
-/* columns */
-.grid > .card:nth-child(1){ grid-column: span 12; }  /* control */
-.grid > .card:nth-child(2){ grid-column: span 4; }   /* players */
-.grid > .card:nth-child(3){ grid-column: span 8; }   /* my hand */
-.grid > .card:nth-child(4){ grid-column: span 12; }  /* opponents */
-.grid > .card:nth-child(5){ grid-column: span 6; }   /* my pending */
-.grid > .card:nth-child(6){ grid-column: span 6; }   /* last round */
-.grid > .card:nth-child(7){ grid-column: span 6; }   /* history */
-.grid > .card:nth-child(8){ grid-column: span 6; }   /* hints */
+.grid > .card:nth-child(1){ grid-column: span 12; }
+.grid > .card:nth-child(2){ grid-column: span 4; }
+.grid > .card:nth-child(3){ grid-column: span 8; }
+.grid > .card:nth-child(4){ grid-column: span 12; }
+.grid > .card:nth-child(5){ grid-column: span 6; }
+.grid > .card:nth-child(6){ grid-column: span 6; }
+.grid > .card:nth-child(7){ grid-column: span 6; }
+.grid > .card:nth-child(8){ grid-column: span 6; }
 
 @media (max-width: 980px){
   .grid{ grid-template-columns: repeat(6, 1fr); }
@@ -95,7 +88,6 @@ body > section.card{
   .grid{ padding: 0 14px 18px; }
 }
 
-/* ---------- Typography / misc ---------- */
 h2{
   margin: 0 0 10px 0;
   font-size: 16px;
@@ -115,7 +107,6 @@ code{
   border: 1px solid rgba(255,255,255,0.12);
 }
 
-/* ---------- Controls ---------- */
 .row{
   display:flex;
   flex-wrap: wrap;
@@ -169,7 +160,6 @@ button:disabled{
   cursor: not-allowed;
 }
 
-/* ---------- Suit picker ---------- */
 .suitpicker{
   display: inline-flex;
   align-items: center;
@@ -186,7 +176,6 @@ button:disabled{
 }
 .suitlabel.red{ color: var(--red); }
 
-/* ---------- Toast ---------- */
 .toast{
   min-height: 18px;
   color: rgba(255,255,255,0.9);
@@ -197,7 +186,6 @@ button:disabled{
   width: 100%;
 }
 
-/* ---------- Card buttons (cards in hand) ---------- */
 .hand{
   display:flex;
   flex-wrap: wrap;
@@ -228,7 +216,29 @@ button:disabled{
   border-color: rgba(45,212,191,0.6);
 }
 
-/* badges */
+/* ✅ NEW: locked card (already used in this round) */
+.cardbtn.locked{
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+}
+.cardbtn.locked:hover{
+  transform: none;
+}
+.cardbtn.locked::after{
+  content: "Зіграно";
+  position: absolute;
+  left: 8px;
+  bottom: -9px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255,77,77,0.25);
+  border: 1px solid rgba(255,77,77,0.35);
+  font-size: 11px;
+  font-weight: 900;
+  color: rgba(255,255,255,0.92);
+}
+
 .badge{
   position:absolute;
   top: -8px;
@@ -258,7 +268,6 @@ button:disabled{
   color: var(--text);
 }
 
-/* ---------- Items / Lists ---------- */
 .item{
   border: 1px solid rgba(255,255,255,0.12);
   background: rgba(0,0,0,0.18);
@@ -267,7 +276,6 @@ button:disabled{
   margin: 8px 0;
 }
 
-/* ---------- Opponents ---------- */
 .opponents{
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -307,7 +315,6 @@ button:disabled{
   transform:none;
 }
 
-/* ---------- Hints ---------- */
 .hints{
   white-space: pre-wrap;
   background: rgba(0,0,0,0.22);
@@ -319,7 +326,6 @@ button:disabled{
   overflow:auto;
 }
 
-/* ---------- HR ---------- */
 hr{
   border: none;
   border-top: 1px solid rgba(255,255,255,0.14);
