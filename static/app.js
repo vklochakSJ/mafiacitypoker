@@ -64,6 +64,7 @@ function isRedSuit(cardTxt) {
   return cardTxt.includes("♥") || cardTxt.includes("♦");
 }
 
+/* --------------- sorting + grouping (by text, keep ids) --------------- */
 const RANK_VALUE = {"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"T":10,"J":11,"Q":12,"K":13,"A":14};
 const SUIT_ORDER = {"♣":1,"♦":2,"♥":3,"♠":4};
 
@@ -160,6 +161,7 @@ function myUsedCardIds(){
 }
 
 /* ------------------ render blocks ------------------ */
+
 function renderOpponents(){
   const box = el("opponentHands");
   box.innerHTML = "";
@@ -235,36 +237,53 @@ function renderMyPending(){
   }
 }
 
-function renderLastRound(){
-  const box = el("lastRound");
-  box.innerHTML = "";
-  if (!state || !state.last_round){
-    box.innerHTML = `<div class="small">(ще немає завершених раундів)</div>`;
+function renderRoundWithAllPlays(container, roundObj){
+  container.innerHTML = "";
+  if (!roundObj){
+    container.innerHTML = `<div class="small">(немає даних)</div>`;
     return;
   }
 
-  const r = state.last_round;
   const title = document.createElement("div");
-  title.innerHTML = `<b>Раунд #${r.round}</b>`;
-  box.appendChild(title);
+  title.innerHTML = `<b>Раунд #${roundObj.round}</b>`;
+  container.appendChild(title);
 
-  if (!r.tables || !r.tables.length){
-    box.appendChild(Object.assign(document.createElement("div"), {className:"small", textContent:"(у цьому раунді ніхто не грав на жодному столі)"}));
+  const tables = roundObj.tables || [];
+  if (!tables.length){
+    container.appendChild(Object.assign(document.createElement("div"), {className:"small", textContent:"(у цьому раунді ніхто не грав)"}));
     return;
   }
 
-  for (const t of r.tables){
+  for (const t of tables){
     const sec = document.createElement("div");
     sec.className = "item";
 
     const w = t.winner;
-    const winnerText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label})` : "(нема)";
+    const winnerText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label}) #${w.placed_seq}` : "(нема)";
 
     sec.innerHTML = `<div><b>${t.table}</b></div>
                      <div class="small">Переможець: ${winnerText}</div>
-                     <div class="small">Зіграно комбінацій: ${(t.plays||[]).length}</div>`;
-    box.appendChild(sec);
+                     <div class="small">Усі комбінації:</div>`;
+
+    const plays = (t.plays || []).slice().sort((a,b)=>(a.placed_seq||0)-(b.placed_seq||0));
+    for (const p of plays){
+      const line = document.createElement("div");
+      line.className = "small";
+      line.textContent = `• #${p.placed_seq} ${p.name}: ${p.cards.join(" ")} — ${p.label}`;
+      sec.appendChild(line);
+    }
+
+    container.appendChild(sec);
   }
+}
+
+function renderLastRound(){
+  const box = el("lastRound");
+  if (!state || !state.last_round){
+    box.innerHTML = `<div class="small">(ще немає завершених раундів)</div>`;
+    return;
+  }
+  renderRoundWithAllPlays(box, state.last_round);
 }
 
 function renderHistory(){
@@ -280,32 +299,50 @@ function renderHistory(){
     const sec = document.createElement("div");
     sec.className = "item";
     sec.innerHTML = `<div><b>Раунд #${r.round}</b></div>`;
-    if (!r.tables || !r.tables.length){
+
+    const tables = r.tables || [];
+    if (!tables.length){
       sec.appendChild(Object.assign(document.createElement("div"), {className:"small", textContent:"(ніхто не грав)"}));
-    } else {
-      for (const t of r.tables){
-        const w = t.winner;
-        const wName = w ? w.name : "(нема)";
+      box.appendChild(sec);
+      continue;
+    }
+
+    for (const t of tables){
+      const w = t.winner;
+      const wText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label}) #${w.placed_seq}` : "(нема)";
+
+      const head = document.createElement("div");
+      head.className = "small";
+      head.innerHTML = `<b>${t.table}</b> — переможець: ${wText}`;
+      sec.appendChild(head);
+
+      const plays = (t.plays || []).slice().sort((a,b)=>(a.placed_seq||0)-(b.placed_seq||0));
+      for (const p of plays){
         const line = document.createElement("div");
         line.className = "small";
-        line.textContent = `${t.table}: переможець — ${wName}; зіграно: ${(t.plays||[]).length}`;
+        line.textContent = `• #${p.placed_seq} ${p.name}: ${p.cards.join(" ")} — ${p.label}`;
         sec.appendChild(line);
       }
+      const spacer = document.createElement("div");
+      spacer.className = "small";
+      spacer.textContent = "";
+      sec.appendChild(spacer);
     }
+
     box.appendChild(sec);
   }
 }
 
 function renderRoundStatus(){
-  const inv = state?.involved_count ?? 0;
+  const active = state?.active_count ?? 0;
   const ready = state?.ready_count ?? 0;
   const youReady = !!state?.you_ready;
 
   let text = "";
-  if (inv === 0) {
-    text = "У цьому раунді ще немає зіграних комбінацій (ніхто не задіяний).";
+  if (active === 0) {
+    text = "Немає активних гравців.";
   } else {
-    text = `Готові: ${ready}/${inv}` + (youReady ? " (ви підтвердили)" : "");
+    text = `Готові: ${ready}/${active}` + (youReady ? " (ви підтвердили)" : "");
   }
   el("roundStatus").textContent = text;
 }
@@ -361,11 +398,9 @@ function render(){
         b.appendChild(badge);
       }
 
-      // click: only cycles through FREE ids
       b.onclick = ()=>{
         if (idsFree.length === 0) return;
 
-        // remove selected locked ids (shouldn't happen, but safe)
         for (const id of idsLocked) selectedCardIds.delete(id);
 
         const selectedHereFree = idsFree.filter(id => selectedCardIds.has(id));
@@ -471,7 +506,6 @@ function disconnect(){
 
 /* ------------------ actions ------------------ */
 function selectedIdList(){
-  // do not allow selecting used cards (extra safety)
   const used = myUsedCardIds();
   return Array.from(selectedCardIds).filter(id => !used.has(id));
 }
