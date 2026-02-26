@@ -16,6 +16,12 @@ from fastapi.responses import FileResponse
 import psycopg
 
 
+# ===================== Fixed players =====================
+
+FIXED_PLAYERS = ["Леви", "Тигри", "Ворони", "Акули", "Змії", "Вовки"]
+FIXED_SET = set(FIXED_PLAYERS)
+
+
 # ===================== PostgreSQL persistence =====================
 
 DATABASE_URL = (os.getenv("DATABASE_URL", "") or "").strip()
@@ -328,8 +334,6 @@ def find_flushes_5plus(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str
     return out
 
 
-# ===================== Models =====================
-
 @dataclass
 class CardInst:
     id: int
@@ -374,9 +378,6 @@ class Play:
     label: str
     placed_ms: int
     placed_seq: int
-
-    def strength_key(self) -> Tuple[int, Tuple[int, ...]]:
-        return (self.cat, self.tb)
 
     def to_public(self) -> Dict[str, Any]:
         return {
@@ -423,7 +424,7 @@ class Room:
     play_seq: int = 0
     next_card_id: int = 1
 
-    def can_join(self) -> bool:
+    def can_join_new_player(self) -> bool:
         return len(self.players) < 6
 
     def new_card(self, rank: str, suit: str) -> CardInst:
@@ -509,7 +510,7 @@ def room_from_state(room_id: str, st: Dict[str, Any]) -> Room:
     r.battle_history = list(st.get("battle_history", []))
 
     for pd in st.get("players", []):
-        p = Player(pid=pd["pid"], name=pd.get("name", "Гравець"))
+        p = Player(pid=pd["pid"], name=pd.get("name", pd["pid"]))
         p.archive = list(pd.get("archive", []))
         p.hand = [CardInst.from_json(x) for x in pd.get("hand", [])]
         r.players[p.pid] = p
@@ -605,6 +606,7 @@ def resolve_round(room: Room) -> Dict[str, Any]:
         for p in plays:
             remove_by_pid.setdefault(p.pid, set()).update(p.card_ids)
 
+    # remove from hands ONLY after round ends
     for pid, ids in remove_by_pid.items():
         if pid in room.players:
             pl = room.players[pid]
@@ -657,19 +659,33 @@ async def ws_endpoint(ws: WebSocket):
             return
 
         room_id = (msg.get("room") or "default").strip()
-        name = (msg.get("name") or "Гравець").strip()[:20]
-        pid = (msg.get("pid") or "").strip() or f"p{random.randint(100000, 999999)}"
+        name = (msg.get("name") or "").strip()
+        pid = (msg.get("pid") or "").strip()
+
+        # ✅ must be fixed player
+        if pid not in FIXED_SET or name not in FIXED_SET or pid != name:
+            await ws.send_text(json.dumps({"type": "error", "message": "Оберіть гравця: Леви/Тигри/Ворони/Акули/Змії/Вовки"}, ensure_ascii=False))
+            return
 
         room = await get_room(room_id)
 
         async with room.lock:
+            # if new fixed player
             if pid not in room.players:
-                if not room.can_join():
-                    await ws.send_text(json.dumps({"type": "error", "message": "Кімната заповнена (макс. 6 гравців)"}, ensure_ascii=False))
+                if not room.can_join_new_player():
+                    await ws.send_text(json.dumps({"type": "error", "message": "Кімната заповнена (6 гравців)"}, ensure_ascii=False))
                     return
                 room.players[pid] = Player(pid=pid, name=name)
             else:
                 room.players[pid].name = name
+
+            # if same player reconnects, kick previous socket
+            old = room.sockets.get(pid)
+            if old is not None and old != ws:
+                try:
+                    await old.close(code=1000)
+                except Exception:
+                    pass
 
             room.sockets[pid] = ws
             await persist_room(room)
@@ -731,7 +747,6 @@ async def ws_endpoint(ws: WebSocket):
                     player.hand.clear()
                     needs_save = True
 
-                # ✅ NEW: delete selected cards from hand
                 elif t == "remove_selected":
                     card_ids = msg.get("card_ids", [])
                     if not isinstance(card_ids, list):
@@ -772,6 +787,12 @@ async def ws_endpoint(ws: WebSocket):
                     if not (2 <= len(card_ids) <= 5):
                         await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
+
+                    used = used_card_ids_in_round(room, player.pid)
+                    if any(cid in used for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Ці карти вже зіграні в поточному раунді"}, ensure_ascii=False))
+                        continue
+
                     lookup = {c.id: c for c in player.hand}
                     if any(cid not in lookup for cid in card_ids):
                         await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
@@ -810,7 +831,7 @@ async def ws_endpoint(ws: WebSocket):
 
                     used = used_card_ids_in_round(room, player.pid)
                     if any(cid in used for cid in card_ids):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Не можна використати ту саму карту двічі в одному раунді"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "Ці карти вже зіграні в поточному раунді"}, ensure_ascii=False))
                         continue
 
                     cards_tuples = [lookup[cid].as_tuple() for cid in card_ids]
