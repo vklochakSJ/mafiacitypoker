@@ -22,16 +22,35 @@ FIXED_PLAYERS = ["Леви", "Тигри", "Ворони", "Акули", "Змі
 FIXED_SET = set(FIXED_PLAYERS)
 
 
-# ===================== PostgreSQL persistence =====================
+# # ===================== PostgreSQL persistence =====================
 
 DATABASE_URL = (os.getenv("DATABASE_URL", "") or "").strip()
-ALLOW_NO_DB = (os.getenv("ALLOW_NO_DB", "") or "").strip() in ("1","true","True","yes","YES")
-AUTOSAVE_SECONDS = int((os.getenv("AUTOSAVE_SECONDS", "") or "15").strip() or "15")
+ALLOW_NO_DB = (os.getenv("ALLOW_NO_DB", "") or "").strip().lower() in ("1","true","yes")
+
+ROOM_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS room_state (
+  room_id TEXT PRIMARY KEY,
+  state   JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+UPSERT_SQL = """
+INSERT INTO room_state (room_id, state, updated_at)
+VALUES (%s, %s::jsonb, now())
+ON CONFLICT (room_id)
+DO UPDATE SET state = EXCLUDED.state, updated_at = now();
+"""
+
+SELECT_SQL = "SELECT state FROM room_state WHERE room_id=%s;"
+
 
 def _normalize_database_url(url: str) -> str:
-    """
-    Fix common misconfigurations (e.g. putting sslmode in the path like /postgres&sslmode=require)
-    and ensure sslmode=require is present.
+    """Fix common mistakes and ensure sslmode=require is present.
+
+    - Converts '/postgres&sslmode=require' -> '/postgres?sslmode=require'
+    - If someone appended parameters to the path with '&', moves them into query.
+    - Ensures sslmode=require exists (adds with '?' or '&' depending on existing query).
     """
     if not url:
         return url
@@ -40,9 +59,8 @@ def _normalize_database_url(url: str) -> str:
         path = p.path or ""
         query = p.query or ""
 
-        # If someone mistakenly appended query params with "&" to the PATH (no "?"), fix it.
-        if "&sslmode=" in path or "&" in path:
-            # Split path at first "&" and move the rest into query
+        # If query params were mistakenly appended to PATH with '&' (no '?'), fix it.
+        if "&" in path and "?" not in path:
             base_path, extra = path.split("&", 1)
             path = base_path
             query = (query + "&" if query else "") + extra
@@ -61,33 +79,11 @@ def _normalize_database_url(url: str) -> str:
         )
         return urlunparse(new_p)
     except Exception:
-        # Best effort fallback: append sslmode correctly
+        # Fallback: just append sslmode safely
         if "sslmode=" in url:
             return url
         joiner = "&" if "?" in url else "?"
         return url + f"{joiner}sslmode=require"
-
-DATABASE_URL = _normalize_database_url(DATABASE_URL)
-
-if not DATABASE_URL and not ALLOW_NO_DB:
-    raise RuntimeError("DATABASE_URL is not set. Persistence is required (set ALLOW_NO_DB=1 to run without DB).")
-
-ROOM_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS room_state (
-  room_id TEXT PRIMARY KEY,
-  state   JSONB NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-"""
-
-UPSERT_SQL = """
-INSERT INTO room_state (room_id, state, updated_at)
-VALUES (%s, %s::jsonb, now())
-ON CONFLICT (room_id)
-DO UPDATE SET state = EXCLUDED.state, updated_at = now();
-"""
-
-SELECT_SQL = "SELECT state FROM room_state WHERE room_id=%s;"
 
 
 def _prefer_ipv4_database_url(url: str) -> str:
@@ -134,7 +130,6 @@ def _prefer_ipv4_database_url(url: str) -> str:
 
 
 def _db_connect():
-    # Normalize URL (fix path/query mistakes) and ensure sslmode=require.
     url = _prefer_ipv4_database_url(_normalize_database_url(DATABASE_URL))
     return psycopg.connect(url, autocommit=True)
 
@@ -148,6 +143,7 @@ def _db_init_sync():
     with _db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(ROOM_TABLE_SQL)
+    print("DB: init OK")
 
 
 def _db_load_room_sync(room_id: str) -> Optional[dict]:
@@ -202,16 +198,182 @@ async def db_save_room(room_id: str, state: dict) -> None:
         print(f"DB: save failed for room={room_id}. Error: {e}")
 
 
-# ===================== Game constants ===========
+# ===================== Game constants =====================
 
-RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
-SUITS = ["♠", "♥", "♦", "♣"]
-RANK_VALUE = {r: i for i, r in enumerate(RANKS)}
+TABLES = [
+    "МІДТАУН","ФЕЛБЛОК","ГАРЛЕМ","РІВЕРСАЙД","ОКСМІР","ІНДЕЙЛ","ХАРБОР","ХІЛЛФОРД","БРАЙТОН","ЯРВІК",
+    "ХАЙТС","ГРЕЙРОК","НОРТБРІДЖ","БЕЙСАЙД","КРОСБІ","ІСТ-ТАУН","САУЗБРІДЖ","ГРІНВЕЙ","ТОРВІК","ДАУНТАУН",
+    "БРУКЛІН","ЛІБЕРТІ","ЕШПАРК","СОХО","ВЕСТ-САЙД","АЙРОНХІЛЛ","САУЗГЕЙТ","ФЕЙРМОНТ","ХАЙЛЕНД","ТВІНС",
+]
 
-TABLES = [f"T{i+1}" for i in range(30)]
+RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
+SUITS = ["♣", "♦", "♥", "♠"]
+RANK_VALUE = {r: i for i, r in enumerate(RANKS, start=2)}
 
 
-# ===================== Card/Play models =========
+def card_str(card: Tuple[str, str]) -> str:
+    return f"{card[0]}{card[1]}"
+
+
+def straight_high(values: List[int]) -> Optional[int]:
+    n = len(values)
+    v = sorted(set(values))
+    if len(v) != n:
+        return None
+    if n == 5 and v == [2, 3, 4, 5, 14]:
+        return 5
+    if max(v) - min(v) == n - 1:
+        return max(v)
+    return None
+
+
+CAT_2 = {"HIGH": 1, "PAIR": 2}
+CAT_3 = {"HIGH": 1, "PAIR": 2, "TRIPS": 3, "FLUSH": 4, "STRAIGHT": 5}
+CAT_4 = {"HIGH": 1, "PAIR": 2, "TWO_PAIR": 3, "TRIPS": 4, "FLUSH": 5, "STRAIGHT": 6, "QUADS": 7}
+CAT_5 = {
+    "HIGH": 1, "PAIR": 2, "TWO_PAIR": 3, "TRIPS": 4,
+    "STRAIGHT": 5, "FLUSH": 6, "FULL_HOUSE": 7, "QUADS": 8,
+    "STRAIGHT_FLUSH": 9,
+}
+
+
+def eval_strict(cards: List[Tuple[str, str]]) -> Tuple[int, Tuple[int, ...], str]:
+    n = len(cards)
+    if not (2 <= n <= 5):
+        raise ValueError("Потрібно 2–5 карт")
+
+    ranks = [r for r, _ in cards]
+    suits = [s for _, s in cards]
+
+    cnt: Dict[str, int] = {}
+    for r in ranks:
+        cnt[r] = cnt.get(r, 0) + 1
+    items = sorted(cnt.items(), key=lambda kv: (kv[1], RANK_VALUE[kv[0]]), reverse=True)
+
+    is_flush = len(set(suits)) == 1
+    values = [RANK_VALUE[r] for r in ranks]
+    sh = straight_high(values)
+
+    if n == 2:
+        if items[0][1] == 2:
+            pair = RANK_VALUE[items[0][0]]
+            return CAT_2["PAIR"], (pair,), "Пара"
+        return CAT_2["HIGH"], tuple(sorted(values, reverse=True)), "Старші карти"
+
+    if n == 3:
+        if items[0][1] == 3:
+            trip = RANK_VALUE[items[0][0]]
+            return CAT_3["TRIPS"], (trip,), "Трійка"
+        if items[0][1] == 2:
+            pair = RANK_VALUE[items[0][0]]
+            kicker = max(RANK_VALUE[r] for r, c in items if c == 1)
+            return CAT_3["PAIR"], (pair, kicker), "Пара"
+        if sh is not None:
+            return CAT_3["STRAIGHT"], (sh,), "Стріт (3)"
+        if is_flush:
+            return CAT_3["FLUSH"], tuple(sorted(values, reverse=True)), "Флеш (3)"
+        return CAT_3["HIGH"], tuple(sorted(values, reverse=True)), "Старші карти"
+
+    if n == 4:
+        if items[0][1] == 4:
+            quad = RANK_VALUE[items[0][0]]
+            return CAT_4["QUADS"], (quad,), "Каре"
+        if items[0][1] == 3:
+            trip = RANK_VALUE[items[0][0]]
+            kicker = max(RANK_VALUE[r] for r, c in items if c == 1)
+            return CAT_4["TRIPS"], (trip, kicker), "Трійка"
+        if items[0][1] == 2 and items[1][1] == 2:
+            p1, p2 = RANK_VALUE[items[0][0]], RANK_VALUE[items[1][0]]
+            hi, lo = max(p1, p2), min(p1, p2)
+            kicker = max(RANK_VALUE[r] for r, c in items if c == 1)
+            return CAT_4["TWO_PAIR"], (hi, lo, kicker), "Дві пари"
+        if items[0][1] == 2:
+            pair = RANK_VALUE[items[0][0]]
+            kickers = sorted((RANK_VALUE[r] for r, c in items if c == 1), reverse=True)
+            return CAT_4["PAIR"], (pair, *kickers), "Пара"
+        if sh is not None:
+            return CAT_4["STRAIGHT"], (sh,), "Стріт (4)"
+        if is_flush:
+            return CAT_4["FLUSH"], tuple(sorted(values, reverse=True)), "Флеш (4)"
+        return CAT_4["HIGH"], tuple(sorted(values, reverse=True)), "Старші карти"
+
+    if sh is not None and is_flush:
+        return CAT_5["STRAIGHT_FLUSH"], (sh,), "Стріт-флеш"
+    if items[0][1] == 4:
+        quad = RANK_VALUE[items[0][0]]
+        kicker = max(RANK_VALUE[r] for r, c in items if c == 1)
+        return CAT_5["QUADS"], (quad, kicker), "Каре"
+    if items[0][1] == 3 and items[1][1] == 2:
+        trip = RANK_VALUE[items[0][0]]
+        pair = RANK_VALUE[items[1][0]]
+        return CAT_5["FULL_HOUSE"], (trip, pair), "Фул-хаус"
+    if is_flush:
+        return CAT_5["FLUSH"], tuple(sorted(values, reverse=True)), "Флеш"
+    if sh is not None:
+        return CAT_5["STRAIGHT"], (sh,), "Стріт"
+    if items[0][1] == 3:
+        trip = RANK_VALUE[items[0][0]]
+        kickers = sorted((RANK_VALUE[r] for r, c in items if c == 1), reverse=True)
+        return CAT_5["TRIPS"], (trip, *kickers), "Трійка"
+    if items[0][1] == 2 and items[1][1] == 2:
+        p1, p2 = RANK_VALUE[items[0][0]], RANK_VALUE[items[1][0]]
+        hi, lo = max(p1, p2), min(p1, p2)
+        kicker = max(RANK_VALUE[r] for r, c in items if c == 1)
+        return CAT_5["TWO_PAIR"], (hi, lo, kicker), "Дві пари"
+    if items[0][1] == 2:
+        pair = RANK_VALUE[items[0][0]]
+        kickers = sorted((RANK_VALUE[r] for r, c in items if c == 1), reverse=True)
+        return CAT_5["PAIR"], (pair, *kickers), "Пара"
+    return CAT_5["HIGH"], tuple(sorted(values, reverse=True)), "Старша карта"
+
+
+def find_pairs_trips_quads(hand_cards: List[Tuple[str, str]]) -> Dict[str, List[List[Tuple[str, str]]]]:
+    by_rank: Dict[str, List[Tuple[str, str]]] = {}
+    for c in hand_cards:
+        by_rank.setdefault(c[0], []).append(c)
+    out = {"pairs": [], "trips": [], "quads": []}
+    for _, cards in by_rank.items():
+        if len(cards) >= 2:
+            out["pairs"].extend([list(x) for x in itertools.combinations(cards, 2)])
+        if len(cards) >= 3:
+            out["trips"].extend([list(x) for x in itertools.combinations(cards, 3)])
+        if len(cards) >= 4:
+            out["quads"].extend([list(x) for x in itertools.combinations(cards, 4)])
+    return out
+
+
+def find_straights_5(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+    by_rank: Dict[int, List[Tuple[str, str]]] = {}
+    for r, s in hand_cards:
+        by_rank.setdefault(RANK_VALUE[r], []).append((r, s))
+    straights: List[List[Tuple[str, str]]] = []
+
+    def pick(seq_vals: List[int]) -> List[Tuple[str, str]]:
+        return [by_rank[v][0] for v in seq_vals]
+
+    for start in range(2, 11):
+        seq = list(range(start, start + 5))
+        if all(v in by_rank for v in seq):
+            straights.append(pick(seq))
+
+    wheel = [14, 2, 3, 4, 5]
+    if all(v in by_rank for v in wheel):
+        straights.append(pick(wheel))
+
+    return straights
+
+
+def find_flushes_5plus(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+    by_suit: Dict[str, List[Tuple[str, str]]] = {}
+    for c in hand_cards:
+        by_suit.setdefault(c[1], []).append(c)
+    out: List[List[Tuple[str, str]]] = []
+    for _, cards in by_suit.items():
+        if len(cards) >= 5:
+            combos = list(itertools.combinations(cards, 5))[:25]
+            out.extend([list(x) for x in combos])
+    return out
+
 
 @dataclass
 class CardInst:
@@ -219,12 +381,22 @@ class CardInst:
     rank: str
     suit: str
 
-    def to_json(self) -> dict:
-        return {"id": self.id, "rank": self.rank, "suit": self.suit}
+    def as_tuple(self) -> Tuple[str, str]:
+        return (self.rank, self.suit)
+
+    def as_text(self) -> str:
+        return f"{self.rank}{self.suit}"
+
+    def to_json(self) -> Dict[str, Any]:
+        return {"id": self.id, "c": self.as_text()}
 
     @staticmethod
-    def from_json(d: dict) -> "CardInst":
-        return CardInst(id=int(d["id"]), rank=d["rank"], suit=d["suit"])
+    def from_json(d: Dict[str, Any]) -> "CardInst":
+        cid = int(d["id"])
+        c = d.get("c") or ""
+        rank = c[:-1]
+        suit = c[-1:]
+        return CardInst(id=cid, rank=rank, suit=suit)
 
 
 @dataclass
@@ -232,30 +404,51 @@ class Player:
     pid: str
     name: str
     hand: List[CardInst] = field(default_factory=list)
-    archive: List[dict] = field(default_factory=list)
+    archive: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
 class Play:
     pid: str
-    cards: List[CardInst]
+    name: str
+    table: str
+    card_ids: List[int]
+    cards_text: List[str]
     cat: int
-    tb: List[int]
-    placed_seq: int
+    tb: Tuple[int, ...]
+    label: str
     placed_ms: int
+    placed_seq: int
 
     def to_public(self) -> Dict[str, Any]:
         return {
             "pid": self.pid,
-            "cards": [c.to_json() for c in self.cards],
+            "name": self.name,
+            "table": self.table,
+            "cards": self.cards_text,
             "cat": self.cat,
-            "tb": self.tb,
-            "placed_seq": self.placed_seq,
+            "tb": list(self.tb),
+            "label": self.label,
             "placed_ms": self.placed_ms,
+            "placed_seq": self.placed_seq,
+            "card_ids": list(self.card_ids),
         }
 
+    @staticmethod
+    def from_json(d: Dict[str, Any]) -> "Play":
+        return Play(
+            pid=d["pid"],
+            name=d["name"],
+            table=d["table"],
+            card_ids=[int(x) for x in d.get("card_ids", [])],
+            cards_text=list(d.get("cards", [])),
+            cat=int(d["cat"]),
+            tb=tuple(int(x) for x in d.get("tb", [])),
+            label=d["label"],
+            placed_ms=int(d.get("placed_ms", 0)),
+            placed_seq=int(d.get("placed_seq", 0)),
+        )
 
-# ===================== Room =====================
 
 @dataclass
 class Room:
@@ -271,7 +464,6 @@ class Room:
     ready_pids: Set[str] = field(default_factory=set)
     play_seq: int = 0
     next_card_id: int = 1
-    last_saved_ms: int = 0
 
     def can_join_new_player(self) -> bool:
         return len(self.players) < 6
@@ -290,98 +482,34 @@ def parse_card_text(t: str) -> Optional[Tuple[str, str]]:
     t = (t or "").strip()
     if not t:
         return None
-    suit = None
-    for s in SUITS:
-        if t.endswith(s):
-            suit = s
-            t = t[:-1]
-            break
-    if suit is None:
+    suit_map = {"c":"♣","♣":"♣","d":"♦","♦":"♦","h":"♥","♥":"♥","s":"♠","♠":"♠"}
+    s = t[-1].lower()
+    if s not in suit_map:
         return None
-    rank = t.strip().upper()
-    if rank == "1":
-        rank = "A"
-    if rank not in RANK_VALUE:
+    suit = suit_map[s]
+    rank_part = t[:-1].strip()
+    rank = "T" if rank_part == "10" else rank_part.upper()
+    if rank not in RANKS:
         return None
-    return rank, suit
+    return (rank, suit)
 
 
-def evaluate_hand(cards: List[CardInst]) -> Tuple[int, List[int]]:
-    ranks = sorted([RANK_VALUE[c.rank] for c in cards], reverse=True)
-    counts: Dict[int, int] = {}
-    for r in ranks:
-        counts[r] = counts.get(r, 0) + 1
-    by_count = sorted(counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
+def random_unique_cards(n: int) -> List[Tuple[str, str]]:
+    if n < 0:
+        raise ValueError("N має бути ≥ 0")
+    if n > 52:
+        raise ValueError("За одну роздачу максимум 52 унікальні карти")
+    deck = [(r, s) for r in RANKS for s in SUITS]
+    return random.sample(deck, n)
 
-    is_flush = len(set(c.suit for c in cards)) == 1
-    uniq = sorted(set(ranks), reverse=True)
-    is_straight = False
-    straight_high = None
-    if len(uniq) == len(cards):
-        if uniq and uniq[0] - uniq[-1] == len(cards) - 1:
-            is_straight = True
-            straight_high = uniq[0]
-        elif uniq == [12, 3, 2, 1, 0] and len(cards) == 5:
-            is_straight = True
-            straight_high = 3
 
-    if len(cards) == 5:
-        if is_straight and is_flush:
-            return 8, [straight_high]
-        if by_count[0][1] == 4:
-            four = by_count[0][0]
-            kicker = [r for r in uniq if r != four][0]
-            return 7, [four, kicker]
-        if by_count[0][1] == 3 and by_count[1][1] == 2:
-            return 6, [by_count[0][0], by_count[1][0]]
-        if is_flush:
-            return 5, ranks
-        if is_straight:
-            return 4, [straight_high]
-        if by_count[0][1] == 3:
-            trips = by_count[0][0]
-            kickers = [r for r in uniq if r != trips]
-            return 3, [trips] + kickers
-        if by_count[0][1] == 2 and by_count[1][1] == 2:
-            p1, p2 = by_count[0][0], by_count[1][0]
-            kicker = [r for r in uniq if r not in (p1, p2)][0]
-            return 2, sorted([p1, p2], reverse=True) + [kicker]
-        if by_count[0][1] == 2:
-            pair = by_count[0][0]
-            kickers = [r for r in uniq if r != pair]
-            return 1, [pair] + kickers
-        return 0, ranks
-
-    if len(cards) == 4:
-        if by_count[0][1] == 4:
-            return 7, [by_count[0][0]]
-        if by_count[0][1] == 3:
-            trips = by_count[0][0]
-            kicker = [r for r in uniq if r != trips][0]
-            return 3, [trips, kicker]
-        if by_count[0][1] == 2 and by_count[1][1] == 2:
-            return 2, sorted([by_count[0][0], by_count[1][0]], reverse=True)
-        if by_count[0][1] == 2:
-            pair = by_count[0][0]
-            kickers = [r for r in uniq if r != pair]
-            return 1, [pair] + kickers
-        return 0, ranks
-
-    if len(cards) == 3:
-        if by_count[0][1] == 3:
-            return 3, [by_count[0][0]]
-        if by_count[0][1] == 2:
-            pair = by_count[0][0]
-            kicker = [r for r in uniq if r != pair][0]
-            return 1, [pair, kicker]
-        return 0, ranks
-
-    if len(cards) == 2:
-        if by_count[0][1] == 2:
-            return 1, [by_count[0][0]]
-        return 0, ranks
-
-    return 0, ranks
+def used_card_ids_in_round(room: Room, pid: str) -> Set[int]:
+    used: Set[int] = set()
+    for t in TABLES:
+        for play in room.pending.get(t, []):
+            if play.pid == pid:
+                used.update(play.card_ids)
+    return used
 
 
 def active_pids(room: Room) -> Set[str]:
@@ -407,7 +535,6 @@ def room_to_state(room: Room) -> Dict[str, Any]:
         "players": players,
         "pending": pending,
         "battle_history": room.battle_history,
-        "last_saved_ms": room.last_saved_ms,
     }
 
 
@@ -418,7 +545,6 @@ def room_from_state(room_id: str, st: Dict[str, Any]) -> Room:
     r.next_card_id = int(st.get("next_card_id", 1))
     r.ready_pids = set(st.get("ready_pids", []))
     r.battle_history = list(st.get("battle_history", []))
-    r.last_saved_ms = int(st.get("last_saved_ms", 0))
 
     for pd in st.get("players", []):
         p = Player(pid=pd["pid"], name=pd.get("name", pd["pid"]))
@@ -426,21 +552,11 @@ def room_from_state(room_id: str, st: Dict[str, Any]) -> Room:
         p.hand = [CardInst.from_json(x) for x in pd.get("hand", [])]
         r.players[p.pid] = p
 
-    pend = st.get("pending", {})
+    r.pending = {t: [] for t in TABLES}
+    pend = st.get("pending", {}) or {}
     for t in TABLES:
-        r.pending[t] = []
-        for pl in pend.get(t, []):
-            cards = [CardInst.from_json(x) for x in pl.get("cards", [])]
-            r.pending[t].append(
-                Play(
-                    pid=pl["pid"],
-                    cards=cards,
-                    cat=int(pl["cat"]),
-                    tb=list(pl.get("tb", [])),
-                    placed_seq=int(pl.get("placed_seq", 0)),
-                    placed_ms=int(pl.get("placed_ms", 0)),
-                )
-            )
+        for pl in pend.get(t, []) or []:
+            r.pending[t].append(Play.from_json(pl))
     return r
 
 
@@ -448,19 +564,13 @@ async def get_room(room_id: str) -> Room:
     async with ROOMS_LOCK:
         if room_id in ROOMS:
             return ROOMS[room_id]
-
         st = await db_load_room(room_id)
-        if st:
-            room = room_from_state(room_id, st)
-        else:
-            room = Room(room_id=room_id)
-
+        room = room_from_state(room_id, st) if st else Room(room_id=room_id)
         ROOMS[room_id] = room
         return room
 
 
 async def persist_room(room: Room) -> None:
-    room.last_saved_ms = int(time.time() * 1000)
     await db_save_room(room.room_id, room_to_state(room))
 
 
@@ -496,7 +606,6 @@ def room_snapshot_for(room: Room, viewer_pid: str) -> Dict[str, Any]:
         "active_count": len(act),
         "ready_count": len(act.intersection(room.ready_pids)),
         "you_ready": (viewer_pid in room.ready_pids),
-        "last_saved_ms": room.last_saved_ms,
     }
 
 
@@ -509,106 +618,55 @@ async def broadcast(room: Room) -> None:
         except Exception:
             dead.append(pid)
     for pid in dead:
-        try:
-            del room.sockets[pid]
-        except Exception:
-            pass
+        room.sockets.pop(pid, None)
 
 
-def _pid_name_from_query(pid: str) -> Optional[str]:
-    pid = (pid or "").strip()
-    if pid in FIXED_SET:
-        return pid
-    return None
-
-
-def _ensure_fixed_player(room: Room, pid: str) -> Player:
-    if pid in room.players:
-        return room.players[pid]
-    p = Player(pid=pid, name=pid)
-    room.players[pid] = p
-    return p
-
-
-def _deal_cards(room: Room, player: Player, n: int = 8) -> None:
-    for _ in range(n):
-        rank = random.choice(RANKS)
-        suit = random.choice(SUITS)
-        player.hand.append(room.new_card(rank, suit))
-    player.hand.sort(key=lambda c: (RANK_VALUE[c.rank], c.suit))
-
-
-def _card_ids(cards: List[CardInst]) -> Set[int]:
-    return set(c.id for c in cards)
-
-
-def _used_card_ids_in_round(room: Room) -> Set[int]:
-    used: Set[int] = set()
-    for t in TABLES:
-        for pl in room.pending.get(t, []):
-            used |= _card_ids(pl.cards)
-    return used
-
-
-def _remove_cards_from_hand(player: Player, ids: Set[int]) -> None:
-    player.hand = [c for c in player.hand if c.id not in ids]
-
-
-def _resolve_table_plays(plays: List[Play]) -> Tuple[Optional[Play], List[Play]]:
-    if not plays:
-        return None, []
-    best = plays[0]
-    for pl in plays[1:]:
-        if (pl.cat, pl.tb) > (best.cat, best.tb):
-            best = pl
-        elif (pl.cat, pl.tb) == (best.cat, best.tb):
-            if pl.placed_seq < best.placed_seq:
-                best = pl
-    losers = [p for p in plays if p is not best]
-    return best, losers
-
-
-async def resolve_round(room: Room) -> None:
-    removed_by_pid: Dict[str, Set[int]] = {}
-
-    round_result = {
-        "round_no": room.round_no,
-        "tables": [],
-        "ts_ms": int(time.time() * 1000),
-    }
+def resolve_round(room: Room) -> Dict[str, Any]:
+    room.round_no += 1
+    round_id = room.round_no
+    tables_out: List[Dict[str, Any]] = []
+    remove_by_pid: Dict[str, Set[int]] = {}
 
     for t in TABLES:
         plays = room.pending.get(t, [])
         if not plays:
             continue
-        winner, losers = _resolve_table_plays(plays)
-        if winner:
-            removed_by_pid.setdefault(winner.pid, set()).update(_card_ids(winner.cards))
-        for lo in losers:
-            removed_by_pid.setdefault(lo.pid, set()).update(_card_ids(lo.cards))
 
-        round_result["tables"].append({
+        best_strength = max((p.cat, p.tb) for p in plays)
+        best_plays = [p for p in plays if (p.cat, p.tb) == best_strength]
+        winner = min(best_plays, key=lambda p: p.placed_seq)
+
+        tables_out.append({
             "table": t,
-            "winner": winner.to_public() if winner else None,
-            "losers": [x.to_public() for x in losers],
+            "plays": [p.to_public() for p in plays],   # ✅ keep all plays
+            "winner": winner.to_public(),
         })
 
-    for pid, ids in removed_by_pid.items():
+        for p in plays:
+            remove_by_pid.setdefault(p.pid, set()).update(p.card_ids)
+
+    # remove from hands ONLY after round ends
+    for pid, ids in remove_by_pid.items():
         if pid in room.players:
-            _remove_cards_from_hand(room.players[pid], ids)
+            pl = room.players[pid]
+            pl.hand = [c for c in pl.hand if c.id not in ids]
+
+    round_rec = {"round": round_id, "tables": tables_out}
+    room.battle_history.append(round_rec)
 
     room.pending = {t: [] for t in TABLES}
     room.ready_pids.clear()
-
-    room.battle_history.append(round_result)
-
-    await persist_room(room)
+    return round_rec
 
 
-async def maybe_finish_round(room: Room) -> None:
+def maybe_finish_round(room: Room) -> Optional[Dict[str, Any]]:
+    # ✅ NEW: requires ALL active players to vote
     act = active_pids(room)
-    if act and act.issubset(room.ready_pids):
-        await resolve_round(room)
+    if not act:
+        return None
+    if act.issubset(room.ready_pids):
+        return resolve_round(room)
+    return None
 
 
 app = FastAPI()
@@ -618,33 +676,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.on_event("startup")
 async def _startup():
     await db_init()
-    # Periodically persist all rooms so a Render restart doesn't lose recent moves.
-    asyncio.create_task(_autosave_loop())
-
-
-@app.on_event("shutdown")
-async def _shutdown():
-    # Best-effort save of all rooms on graceful shutdown.
-    try:
-        async with ROOMS_LOCK:
-            rooms = list(ROOMS.values())
-        for r in rooms:
-            await persist_room(r)
-    except Exception as e:
-        print(f"DB: shutdown save failed. Error: {e}")
-
-
-async def _autosave_loop():
-    while True:
-        await asyncio.sleep(AUTOSAVE_SECONDS)
-        try:
-            async with ROOMS_LOCK:
-                rooms = list(ROOMS.values())
-            for r in rooms:
-                await persist_room(r)
-        except Exception as e:
-            print(f"DB: autosave failed. Error: {e}")
-
 
 
 @app.get("/")
@@ -656,148 +687,273 @@ async def root():
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
 
-    room_id = (ws.query_params.get("room", "") or "demo").strip()
-    pid = (ws.query_params.get("pid", "") or "").strip()
-    pid_name = _pid_name_from_query(pid)
-    if not pid_name:
-        await ws.send_text(json.dumps({"type": "error", "error": "Invalid player"}, ensure_ascii=False))
-        await ws.close()
-        return
-
-    room = await get_room(room_id)
-
-    # Reconnect: replace socket
-    async with room.lock:
-        old = room.sockets.get(pid_name)
-        room.sockets[pid_name] = ws
-        if old and old is not ws:
-            try:
-                await old.close()
-            except Exception:
-                pass
-
-        player = _ensure_fixed_player(room, pid_name)
-        if not player.hand:
-            _deal_cards(room, player, n=8)
-
-        await persist_room(room)
-        await broadcast(room)
+    pid: Optional[str] = None
+    room: Optional[Room] = None
 
     try:
-        while True:
-            msg_raw = await ws.receive_text()
-            try:
-                msg = json.loads(msg_raw)
-            except Exception:
-                continue
+        raw = await ws.receive_text()
+        msg = json.loads(raw)
 
-            mtype = msg.get("type")
+        if msg.get("type") != "join":
+            await ws.send_text(json.dumps({"type": "error", "message": "Перше повідомлення має бути типу join"}, ensure_ascii=False))
+            return
+
+        room_id = (msg.get("room") or "default").strip()
+        name = (msg.get("name") or "").strip()
+        pid = (msg.get("pid") or "").strip()
+
+        if pid not in FIXED_SET or name not in FIXED_SET or pid != name:
+            await ws.send_text(json.dumps({"type": "error", "message": "Оберіть гравця: Леви/Тигри/Ворони/Акули/Змії/Вовки"}, ensure_ascii=False))
+            return
+
+        room = await get_room(room_id)
+
+        async with room.lock:
+            if pid not in room.players:
+                if not room.can_join_new_player():
+                    await ws.send_text(json.dumps({"type": "error", "message": "Кімната заповнена (6 гравців)"}, ensure_ascii=False))
+                    return
+                room.players[pid] = Player(pid=pid, name=name)
+            else:
+                room.players[pid].name = name
+
+            old = room.sockets.get(pid)
+            if old is not None and old != ws:
+                try:
+                    await old.close(code=1000)
+                except Exception:
+                    pass
+
+            room.sockets[pid] = ws
+
+            # ✅ when someone connects, they are NOT ready by default
+            room.ready_pids.discard(pid)
+
+            await persist_room(room)
+
+        await ws.send_text(json.dumps({"type": "joined", "pid": pid, "room": room_id}, ensure_ascii=False))
+
+        async with room.lock:
+            await broadcast(room)
+
+        while True:
+            raw = await ws.receive_text()
+            msg = json.loads(raw)
+            t = msg.get("type")
+
+            needs_save = False
+            one_shot_round: Optional[dict] = None
 
             async with room.lock:
-                player = _ensure_fixed_player(room, pid_name)
+                if pid not in room.players:
+                    continue
+                player = room.players[pid]
 
-                if mtype == "state":
-                    snap = room_snapshot_for(room, pid_name)
-                    await ws.send_text(json.dumps({"type": "state", "state": snap}, ensure_ascii=False))
+                if t == "deal":
+                    n = int(msg.get("n", 0))
+                    if n < 0:
+                        await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
+                        continue
+                    if n > 52:
+                        await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
+                        continue
+                    deck = [(r, s) for r in RANKS for s in SUITS]
+                    for r_, s_ in random.sample(deck, n):
+                        player.hand.append(room.new_card(r_, s_))
+                    needs_save = True
 
-                elif mtype == "place":
-                    table = msg.get("table")
-                    cards_in = msg.get("cards", [])
+                elif t == "deal_all":
+                    n = int(msg.get("n", 0))
+                    if n < 0:
+                        await ws.send_text(json.dumps({"type": "error", "message": "N має бути ≥ 0"}, ensure_ascii=False))
+                        continue
+                    if n > 52:
+                        await ws.send_text(json.dumps({"type": "error", "message": "За одну роздачу максимум 52 унікальні карти"}, ensure_ascii=False))
+                        continue
+                    deck = [(r, s) for r in RANKS for s in SUITS]
+                    for p in room.players.values():
+                        for r_, s_ in random.sample(deck, n):
+                            p.hand.append(room.new_card(r_, s_))
+                    needs_save = True
+
+                elif t == "add_manual":
+                    ctxt = msg.get("card", "")
+                    parsed = parse_card_text(ctxt)
+                    if parsed is None:
+                        await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
+                        continue
+                    r_, s_ = parsed
+                    player.hand.append(room.new_card(r_, s_))
+                    needs_save = True
+
+                elif t == "clear_hand":
+                    player.hand.clear()
+                    needs_save = True
+
+                elif t == "remove_selected":
+                    card_ids = msg.get("card_ids", [])
+                    if not isinstance(card_ids, list):
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
+                        continue
+                    card_ids = [int(x) for x in card_ids]
+                    if not card_ids:
+                        continue
+
+                    used = used_card_ids_in_round(room, player.pid)
+                    if any(cid in used for cid in card_ids):
+                        await ws.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Не можна видаляти карту, яка вже використана у комбінації поточного раунду"
+                        }, ensure_ascii=False))
+                        continue
+
+                    before = len(player.hand)
+                    to_remove = set(card_ids)
+                    player.hand = [c for c in player.hand if c.id not in to_remove]
+                    after = len(player.hand)
+
+                    if after == before:
+                        await ws.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Вибраних карт уже немає в руці"
+                        }, ensure_ascii=False))
+                        continue
+
+                    needs_save = True
+
+                elif t == "eval_selected":
+                    card_ids = msg.get("card_ids", [])
+                    if not isinstance(card_ids, list):
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
+                        continue
+                    card_ids = [int(x) for x in card_ids]
+                    if not (2 <= len(card_ids) <= 5):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
+                        continue
+
+                    used = used_card_ids_in_round(room, player.pid)
+                    if any(cid in used for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Ці карти вже зіграні в поточному раунді"}, ensure_ascii=False))
+                        continue
+
+                    lookup = {c.id: c for c in player.hand}
+                    if any(cid not in lookup for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
+                        continue
+
+                    cards = [lookup[cid].as_tuple() for cid in card_ids]
+                    cat, tb, label = eval_strict(cards)
+                    await ws.send_text(json.dumps({
+                        "type": "eval_result",
+                        "cards": [card_str(c) for c in cards],
+                        "label": label,
+                        "cat": cat,
+                        "tb": tb,
+                    }, ensure_ascii=False))
+                    continue
+
+                elif t == "play_selected":
+                    table = (msg.get("table") or "").strip()
                     if table not in TABLES:
-                        await ws.send_text(json.dumps({"type": "error", "error": "Bad table"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний стіл"}, ensure_ascii=False))
                         continue
 
-                    # Build cards
-                    chosen: List[CardInst] = []
-                    hand_by_id = {c.id: c for c in player.hand}
-                    for cd in cards_in:
-                        try:
-                            cid = int(cd.get("id"))
-                        except Exception:
-                            cid = None
-                        if cid is None or cid not in hand_by_id:
-                            chosen = []
-                            break
-                        chosen.append(hand_by_id[cid])
-
-                    if not (2 <= len(chosen) <= 5):
-                        await ws.send_text(json.dumps({"type": "error", "error": "Need 2-5 cards"}, ensure_ascii=False))
+                    card_ids = msg.get("card_ids", [])
+                    if not isinstance(card_ids, list):
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
+                        continue
+                    card_ids = [int(x) for x in card_ids]
+                    if not (2 <= len(card_ids) <= 5):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
 
-                    # Prevent reuse within round
-                    used = _used_card_ids_in_round(room)
-                    if _card_ids(chosen).intersection(used):
-                        await ws.send_text(json.dumps({"type": "error", "error": "Some cards already used in this round"}, ensure_ascii=False))
+                    lookup = {c.id: c for c in player.hand}
+                    if any(cid not in lookup for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
                         continue
 
-                    cat, tb = evaluate_hand(chosen)
+                    used = used_card_ids_in_round(room, player.pid)
+                    if any(cid in used for cid in card_ids):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Ці карти вже зіграні в поточному раунді"}, ensure_ascii=False))
+                        continue
+
+                    cards_tuples = [lookup[cid].as_tuple() for cid in card_ids]
+                    cat, tb, label = eval_strict(cards_tuples)
+                    cards_text = [lookup[cid].as_text() for cid in card_ids]
+
+                    room.ready_pids.discard(player.pid)
 
                     room.play_seq += 1
-                    play = Play(
-                        pid=pid_name,
-                        cards=chosen,
+                    now_ms = int(time.time() * 1000)
+
+                    room.pending[table].append(Play(
+                        pid=player.pid,
+                        name=player.name,
+                        table=table,
+                        card_ids=card_ids,
+                        cards_text=cards_text,
                         cat=cat,
                         tb=tb,
+                        label=label,
+                        placed_ms=now_ms,
                         placed_seq=room.play_seq,
-                        placed_ms=int(time.time() * 1000),
-                    )
-                    room.pending[table].append(play)
+                    ))
 
-                    # placing invalidates readiness of this player
-                    if pid_name in room.ready_pids:
-                        room.ready_pids.remove(pid_name)
+                    needs_save = True
 
+                elif t == "end_round_vote":
+                    room.ready_pids.add(player.pid)
+                    rr = maybe_finish_round(room)
+                    if rr is not None:
+                        one_shot_round = rr
+                        needs_save = True
+
+                elif t == "end_round_force":
+                    one_shot_round = resolve_round(room)
+                    needs_save = True
+
+                elif t == "hints":
+                    hand_cards = [c.as_tuple() for c in player.hand]
+                    pq = find_pairs_trips_quads(hand_cards)
+                    straights = find_straights_5(hand_cards)
+                    flushes = find_flushes_5plus(hand_cards)
+                    await ws.send_text(json.dumps({
+                        "type": "hints_result",
+                        "count": len(player.hand),
+                        "pairs": [[card_str(c) for c in x] for x in pq["pairs"][:30]],
+                        "trips": [[card_str(c) for c in x] for x in pq["trips"][:30]],
+                        "quads": [[card_str(c) for c in x] for x in pq["quads"][:30]],
+                        "straights5": [[card_str(c) for c in x] for x in straights[:30]],
+                        "flushes5": [[card_str(c) for c in x] for x in flushes[:30]],
+                    }, ensure_ascii=False))
+                    continue
+
+                elif t == "leave":
+                    break
+
+                else:
+                    await ws.send_text(json.dumps({"type": "error", "message": f"Невідомий тип повідомлення: {t}"}, ensure_ascii=False))
+                    continue
+
+                if needs_save:
                     await persist_room(room)
-                    await broadcast(room)
 
-                elif mtype == "remove":
-                    table = msg.get("table")
-                    placed_seq = msg.get("placed_seq")
-                    if table not in TABLES:
-                        await ws.send_text(json.dumps({"type": "error", "error": "Bad table"}, ensure_ascii=False))
-                        continue
-                    try:
-                        placed_seq = int(placed_seq)
-                    except Exception:
-                        await ws.send_text(json.dumps({"type": "error", "error": "Bad placed_seq"}, ensure_ascii=False))
-                        continue
+                if one_shot_round is not None:
+                    for _pid, _ws in list(room.sockets.items()):
+                        try:
+                            await _ws.send_text(json.dumps({"type": "round_result", "round": one_shot_round}, ensure_ascii=False))
+                        except Exception:
+                            pass
 
-                    new_list = []
-                    removed = False
-                    for pl in room.pending.get(table, []):
-                        if pl.pid == pid_name and pl.placed_seq == placed_seq:
-                            removed = True
-                            continue
-                        new_list.append(pl)
-                    room.pending[table] = new_list
-
-                    if removed and pid_name in room.ready_pids:
-                        room.ready_pids.remove(pid_name)
-
-                    await persist_room(room)
-                    await broadcast(room)
-
-                elif mtype == "ready":
-                    room.ready_pids.add(pid_name)
-                    await persist_room(room)
-                    await broadcast(room)
-                    await maybe_finish_round(room)
-                    await broadcast(room)
-
-                elif mtype == "end_round_force":
-                    await resolve_round(room)
-                    await broadcast(room)
+                await broadcast(room)
 
     except WebSocketDisconnect:
-        async with room.lock:
-            if room.sockets.get(pid_name) is ws:
-                del room.sockets[pid_name]
-            await persist_room(room)
-            await broadcast(room)
-
-    except Exception:
-        async with room.lock:
-            if room.sockets.get(pid_name) is ws:
-                del room.sockets[pid_name]
-            await persist_room(room)
-            await broadcast(room)
+        pass
+    finally:
+        if room is not None and pid is not None:
+            async with room.lock:
+                room.sockets.pop(pid, None)
+                # ✅ якщо хтось відвалився — його "готовність" скидаємо
+                room.ready_pids.discard(pid)
+                await persist_room(room)
+                await broadcast(room)
