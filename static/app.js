@@ -13,21 +13,18 @@ const toast = (msg) => {
   setTimeout(() => { el("toast").textContent = ""; }, 3500);
 };
 
-function genPid() {
-  return "p" + Math.random().toString(16).slice(2) + Date.now().toString(16);
-}
-
-function ensurePid() {
-  if (!myPid) {
-    myPid = genPid();
-    sessionStorage.setItem(PID_KEY, myPid);
-  }
+function setPidFromSeat() {
+  const seat = el("seat").value;
+  myPid = seat;
+  sessionStorage.setItem(PID_KEY, myPid);
   el("pid").textContent = myPid;
 }
 
 function setOnline(on) {
   el("connectBtn").disabled = on;
   el("disconnectBtn").disabled = !on;
+  el("seat").disabled = on;
+  el("room").disabled = on;
 
   el("dealMeBtn").disabled = !on;
   el("dealAllBtn").disabled = !on;
@@ -45,7 +42,7 @@ function setOnline(on) {
   el("pickH").disabled = !on;
   el("pickS").disabled = !on;
 
-  el("newIdBtn").disabled = on;
+  el("newTabBtn").disabled = on;
 }
 
 function wsUrl() {
@@ -67,8 +64,6 @@ function isRedSuit(cardTxt) {
   return cardTxt.includes("♥") || cardTxt.includes("♦");
 }
 
-/* --------------- sorting + grouping (by text, keep ids) --------------- */
-
 const RANK_VALUE = {"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"T":10,"J":11,"Q":12,"K":13,"A":14};
 const SUIT_ORDER = {"♣":1,"♦":2,"♥":3,"♠":4};
 
@@ -85,7 +80,6 @@ function sortCardTexts(arr){
   });
 }
 
-// handObjs: [{id, c}, ...]
 function groupHand(handObjs){
   const byText = new Map(); // c -> [ids]
   for (const obj of (handObjs || [])){
@@ -97,7 +91,6 @@ function groupHand(handObjs){
 }
 
 /* ------------------ auto hints ------------------ */
-
 let hintsTimer = null;
 function requestHintsSoon(){
   if (!ws || ws.readyState !== 1) return;
@@ -106,7 +99,6 @@ function requestHintsSoon(){
 }
 
 /* ------------------ suit dropdowns ------------------ */
-
 const RANKS_DESC = ["A","K","Q","J","T","9","8","7","6","5","4","3","2"];
 function fillSuitSelect(selectEl){
   selectEl.innerHTML = "";
@@ -137,7 +129,6 @@ function setupSuitPickers(){
 }
 
 /* ------------------ tables select ------------------ */
-
 function setupTablesSelect(){
   const sel = el("tableSelect");
   sel.innerHTML = "";
@@ -153,8 +144,22 @@ function setupTablesSelect(){
   }
 }
 
-/* ------------------ render blocks ------------------ */
+/* ✅ used ids in my pending => locked */
+function myUsedCardIds(){
+  const used = new Set();
+  const mp = state?.my_pending || {};
+  const tables = state?.tables || [];
+  for (const t of tables){
+    for (const p of (mp[t] || [])){
+      for (const cid of (p.card_ids || [])){
+        used.add(cid);
+      }
+    }
+  }
+  return used;
+}
 
+/* ------------------ render blocks ------------------ */
 function renderOpponents(){
   const box = el("opponentHands");
   box.innerHTML = "";
@@ -306,9 +311,10 @@ function renderRoundStatus(){
 }
 
 /* ------------------ main render ------------------ */
-
 function render(){
   if (!state) return;
+
+  const used = myUsedCardIds();
 
   const playersDiv = el("players");
   playersDiv.innerHTML = "";
@@ -333,12 +339,19 @@ function render(){
 
     const groups = groupHand(myHand);
     for (const g of groups){
+      const idsFree = g.ids.filter(id => !used.has(id));
+      const idsLocked = g.ids.filter(id => used.has(id));
       const selCount = g.ids.filter(id => selectedCardIds.has(id)).length;
 
       const b = document.createElement("div");
-      b.className = "cardbtn"
+      const isAllLocked = idsFree.length === 0;
+
+      b.className =
+        "cardbtn"
         + (isRedSuit(g.card) ? " red" : "")
-        + (selCount>0 ? " selected" : "");
+        + (selCount>0 ? " selected" : "")
+        + (isAllLocked ? " locked" : "");
+
       b.textContent = g.card;
 
       if (g.ids.length > 1){
@@ -347,20 +360,20 @@ function render(){
         badge.textContent = String(g.ids.length);
         b.appendChild(badge);
       }
-      if (selCount > 0){
-        const badge2 = document.createElement("div");
-        badge2.className = "badge2";
-        badge2.textContent = g.ids.length > 1 ? `${selCount}/${g.ids.length}` : `${selCount}`;
-        b.appendChild(badge2);
-      }
 
+      // click: only cycles through FREE ids
       b.onclick = ()=>{
-        const selectedHere = g.ids.filter(id => selectedCardIds.has(id));
-        if (selectedHere.length < g.ids.length){
-          const next = g.ids.find(id => !selectedCardIds.has(id));
+        if (idsFree.length === 0) return;
+
+        // remove selected locked ids (shouldn't happen, but safe)
+        for (const id of idsLocked) selectedCardIds.delete(id);
+
+        const selectedHereFree = idsFree.filter(id => selectedCardIds.has(id));
+        if (selectedHereFree.length < idsFree.length){
+          const next = idsFree.find(id => !selectedCardIds.has(id));
           if (next !== undefined) selectedCardIds.add(next);
         } else {
-          g.ids.forEach(id => selectedCardIds.delete(id));
+          idsFree.forEach(id => selectedCardIds.delete(id));
         }
         render();
       };
@@ -379,18 +392,18 @@ function render(){
 }
 
 /* ------------------ connect ------------------ */
-
 function connect(){
   if (ws) return;
-  ensurePid();
+
+  setPidFromSeat();
 
   const room = el("room").value.trim() || "default";
-  const name = el("name").value.trim() || "Гравець";
+  const seat = el("seat").value;
 
   ws = new WebSocket(wsUrl());
   el("status").textContent = "підключення…";
 
-  ws.onopen = () => send({type:"join", room, name, pid: myPid});
+  ws.onopen = () => send({type:"join", room, name: seat, pid: myPid});
 
   ws.onmessage = (ev)=>{
     const msg = JSON.parse(ev.data);
@@ -457,20 +470,21 @@ function disconnect(){
 }
 
 /* ------------------ actions ------------------ */
-
 function selectedIdList(){
-  return Array.from(selectedCardIds);
+  // do not allow selecting used cards (extra safety)
+  const used = myUsedCardIds();
+  return Array.from(selectedCardIds).filter(id => !used.has(id));
 }
 
 el("connectBtn").onclick = connect;
 el("disconnectBtn").onclick = disconnect;
 
-el("newIdBtn").onclick = ()=>{
-  if (ws) return;
-  myPid = genPid();
-  sessionStorage.setItem(PID_KEY, myPid);
-  el("pid").textContent = myPid;
-  toast("Створено нового гравця для цієї вкладки.");
+el("newTabBtn").onclick = ()=>{
+  window.open(window.location.href, "_blank");
+};
+
+el("seat").onchange = ()=>{
+  if (!ws) setPidFromSeat();
 };
 
 el("dealMeBtn").onclick = ()=>{
@@ -523,7 +537,6 @@ el("forceEndRoundBtn").onclick = ()=>{
 };
 
 /* ------------------ init ------------------ */
-
 setOnline(false);
-ensurePid();
 setupSuitPickers();
+setPidFromSeat();
