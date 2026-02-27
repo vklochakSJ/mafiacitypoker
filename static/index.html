@@ -78,6 +78,7 @@
 
       <div class="row">
         <button id="clearHandBtn" disabled>Очистити руку</button>
+      <button id="addUnknownBtn" disabled>Додати пусту карту</button>
         <button id="removeSelectedBtn" disabled>Видалити вибране</button>
         <button id="evalBtn" disabled>Оцінити вибране (2–5)</button>
       </div>
@@ -132,6 +133,18 @@
     <section class="card">
       <h2>Історія боїв</h2>
       <div id="history"></div>
+    </section>
+
+
+    <section class="card">
+      <h2>Знімки стану (експерименти)</h2>
+      <div class="row">
+        <input id="saveName" placeholder="Назва збереження (наприклад: Варіант А)" />
+        <button id="saveCurrentBtn" disabled>Зберегти</button>
+        <button id="refreshSavesBtn" disabled>Оновити список</button>
+        <span class="small" id="saveStatus"></span>
+      </div>
+      <div id="savesList" class="saves"></div>
     </section>
 
     <section class="card">
