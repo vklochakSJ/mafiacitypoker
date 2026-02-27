@@ -62,18 +62,17 @@ body > section.card{
   margin: 8px auto 0;
 }
 
-.grid > .card:nth-child(1){ grid-column: span 8; }
+.grid > .card:nth-child(1){ grid-column: span 12; }
 .grid > .card:nth-child(2){ grid-column: span 4; }
-.grid > .card:nth-child(3){ grid-column: span 12; }
+.grid > .card:nth-child(3){ grid-column: span 8; }
 .grid > .card:nth-child(4){ grid-column: span 12; }
 .grid > .card:nth-child(5){ grid-column: span 6; }
 .grid > .card:nth-child(6){ grid-column: span 6; }
 .grid > .card:nth-child(7){ grid-column: span 6; }
-.grid > .card:nth-child(8){ grid-column: span 12; }
+.grid > .card:nth-child(8){ grid-column: span 6; }
 
 @media (max-width: 980px){
   .grid{ grid-template-columns: repeat(6, 1fr); }
-  .grid > .card:nth-child(1){ grid-column: span 6; }
   .grid > .card:nth-child(2){ grid-column: span 6; }
   .grid > .card:nth-child(3){ grid-column: span 6; }
   .grid > .card:nth-child(5){ grid-column: span 6; }
@@ -334,20 +333,117 @@ hr{
 }
 
 
-/* --- Layout tweaks: narrower control + players, wide hints --- */
-.grid > .card:nth-child(1){
-  min-width: 0;
-}
-.grid > .card:nth-child(2){
-  min-width: 0;
-  padding: 12px 14px;
-}
-#players .small{
-  line-height: 1.25;
-  margin: 2px 0;
+
+/* ===== Layout overrides (stable, no nth-child) ===== */
+.grid > .card{ grid-column: span 12; }
+
+.span-12{ grid-column: span 12; }
+.span-8{ grid-column: span 8; }
+.span-6{ grid-column: span 6; }
+.span-4{ grid-column: span 4; }
+
+@media (max-width: 980px){
+  .span-8, .span-6 { grid-column: span 12; }
+  .span-4 { grid-column: span 12; }
 }
 
-/* Hints block should feel like a full-width panel */
-.grid > .card:nth-child(8) .hints{
-  min-height: 140px;
+/* Make control + players more compact so they fit side-by-side */
+.compact-card h2{ margin-bottom: 10px; }
+#controlCard .row{ gap: 10px; }
+#controlCard input, #controlCard select{ min-width: 120px; }
+#playersCard{ padding: 12px; }
+#playersCard #players{ font-size: 13px; }
+#playersCard .badge{ padding: 3px 8px; border-radius: 999px; font-size: 12px; }
+
+/* ===== Hints: full-width, readable, multi-column ===== */
+#hintsCard{ padding-bottom: 10px; }
+.hintsGrid{
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: start;
 }
+@media (max-width: 980px){
+  .hintsGrid{ grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+}
+@media (max-width: 520px){
+  .hintsGrid{ grid-template-columns: 1fr; }
+}
+
+.hintBlock{
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+  padding: 10px 10px 8px;
+}
+.hintTitle{
+  font-weight: 800;
+  font-size: 13px;
+  margin: 0 0 8px;
+  color: rgba(255,255,255,0.92);
+}
+.hintItems{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.hintChip{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  padding: 4px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.hintEmpty{
+  color: rgba(255,255,255,0.55);
+  font-size: 12px;
+}
+
+/* ===== Saves list ===== */
+.savesList{
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.saveRow{
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+  padding: 10px;
+}
+.saveMeta{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.saveName{
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saveSub{
+  font-size: 12px;
+  color: rgba(255,255,255,0.65);
+}
+.saveActions{
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.saveActions button{
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.topbar{ max-width: 1200px; margin: 8px auto 0; }
