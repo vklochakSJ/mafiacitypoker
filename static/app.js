@@ -29,8 +29,11 @@ function setOnline(on) {
   el("dealMeBtn").disabled = !on;
   el("dealAllBtn").disabled = !on;
   el("clearHandBtn").disabled = !on;
+  el("addUnknownBtn").disabled = !on;
   el("removeSelectedBtn").disabled = !on;
   el("evalBtn").disabled = !on;
+  el("saveCurrentBtn").disabled = !on;
+  el("refreshSavesBtn").disabled = !on;
 
   el("playBtn").disabled = !on;
   el("endRoundBtn").disabled = !on;
@@ -574,3 +577,63 @@ el("forceEndRoundBtn").onclick = ()=>{
 setOnline(false);
 setupSuitPickers();
 setPidFromSeat();
+
+function requestSavesList() {
+  if (!ws) return;
+  ws.send(JSON.stringify({type: "saves_list"}));
+}
+
+function renderSavesList(saves) {
+  const wrap = el("savesList");
+  wrap.innerHTML = "";
+  if (!saves || saves.length === 0) {
+    wrap.innerHTML = '<div class="small">Немає збережень.</div>';
+    return;
+  }
+  for (const s of saves) {
+    const row = document.createElement("div");
+    row.className = "saveRow";
+    const name = document.createElement("div");
+    name.className = "name";
+    const dt = s.created_ms ? new Date(s.created_ms).toLocaleString() : "";
+    name.textContent = `${s.name} (${dt})`;
+    const loadBtn = document.createElement("button");
+    loadBtn.textContent = "Завантажити";
+    loadBtn.onclick = () => {
+      if (!ws) return;
+      ws.send(JSON.stringify({type: "load_save", save_id: s.id}));
+    };
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "Видалити";
+    delBtn.onclick = () => {
+      if (!ws) return;
+      if (!confirm("Видалити це збереження?")) return;
+      ws.send(JSON.stringify({type: "delete_save", save_id: s.id}));
+      setTimeout(requestSavesList, 400);
+    };
+    row.appendChild(name);
+    row.appendChild(loadBtn);
+    row.appendChild(delBtn);
+    wrap.appendChild(row);
+  }
+}
+
+el("addUnknownBtn").addEventListener("click", () => {
+  if (!ws) return;
+  ws.send(JSON.stringify({type: "add_unknown_card"}));
+});
+
+el("saveCurrentBtn").addEventListener("click", () => {
+  if (!ws) return;
+  const name = (el("saveName").value || "").trim();
+  ws.send(JSON.stringify({type: "save_current", name}));
+  el("saveStatus").textContent = "Збереження...";
+  setTimeout(() => {
+    requestSavesList();
+    el("saveStatus").textContent = "Збережено";
+  }, 700);
+});
+
+el("refreshSavesBtn").addEventListener("click", () => {
+  requestSavesList();
+});
