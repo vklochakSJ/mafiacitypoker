@@ -11,7 +11,8 @@
     <h1>Poker Web</h1>
   </header>
 
-  <section class="card">
+  <!-- Connection bar (full width) -->
+  <section class="card topbar">
     <h2>Підключення</h2>
     <div class="row">
       <label>Кімната:</label>
@@ -30,6 +31,8 @@
       <button id="connectBtn">Підключитись</button>
       <button id="disconnectBtn" disabled>Відключитись</button>
       <button id="newTabBtn">Нова вкладка-гравець</button>
+
+      <span id="saveInfo" class="badge muted">Saved: —</span>
     </div>
 
     <div class="row small">
@@ -42,7 +45,8 @@
   </section>
 
   <main class="grid">
-    <section class="card">
+    <!-- Controls (narrower) -->
+    <section class="card span-8 compact-card" id="controlCard">
       <h2>Керування</h2>
 
       <div class="row">
@@ -50,6 +54,7 @@
         <input id="dealN" type="number" min="0" value="5" />
         <button id="dealMeBtn" disabled>Роздати (мені)</button>
         <button id="dealAllBtn" disabled>Роздати (всім)</button>
+        <button id="unknownBtn" class="secondary" disabled>Додати пусту карту</button>
       </div>
 
       <div class="row">
@@ -78,7 +83,6 @@
 
       <div class="row">
         <button id="clearHandBtn" disabled>Очистити руку</button>
-      <button id="addUnknownBtn" disabled>Додати пусту карту</button>
         <button id="removeSelectedBtn" disabled>Видалити вибране</button>
         <button id="evalBtn" disabled>Оцінити вибране (2–5)</button>
       </div>
@@ -103,53 +107,57 @@
       </div>
     </section>
 
-    <section class="card">
+    <!-- Players (right) -->
+    <section class="card span-4 compact-card" id="playersCard">
       <h2>Гравці в кімнаті</h2>
       <div id="players"></div>
     </section>
 
-    <section class="card">
+    <section class="card span-12">
       <h2>Моя рука</h2>
       <div class="small">Карти, які вже зіграні в цьому раунді — заблоковані.</div>
       <div id="hand" class="hand"></div>
     </section>
 
-    <section class="card">
+    <section class="card span-12">
       <h2>Руки опонентів</h2>
       <div id="opponentHands" class="opponents"></div>
     </section>
 
-    <section class="card">
+    <section class="card span-12">
       <h2>Мої комбінації в цьому раунді</h2>
       <div class="small">Інші гравці цього не бачать.</div>
       <div id="myPending"></div>
     </section>
 
-    <section class="card">
+    <section class="card span-12">
       <h2>Результати останнього раунду</h2>
       <div id="lastRound"></div>
     </section>
 
-    <section class="card">
+    <!-- History + Saves side-by-side -->
+    <section class="card span-6" id="historyCard">
       <h2>Історія боїв</h2>
       <div id="history"></div>
     </section>
 
-
-    <section class="card">
+    <section class="card span-6" id="savesCard">
       <h2>Знімки стану (експерименти)</h2>
       <div class="row">
-        <input id="saveName" placeholder="Назва збереження (наприклад: Варіант А)" />
-        <button id="saveCurrentBtn" disabled>Зберегти</button>
-        <button id="refreshSavesBtn" disabled>Оновити список</button>
-        <span class="small" id="saveStatus"></span>
+        <input id="saveName" placeholder="Назва збереження (напр. Варіант А)" />
+        <button id="saveBtn" class="secondary" disabled>Зберегти</button>
+        <button id="refreshSavesBtn" class="secondary" disabled>Оновити список</button>
       </div>
-      <div id="savesList" class="saves"></div>
+      <div id="savesList" class="savesList"></div>
+      <div class="small muted">Натисни “Завантажити”, щоб перейти на збережений стан і продовжити гру.</div>
     </section>
 
-    <section class="card">
+    <!-- Hints full width -->
+    <section class="card span-12" id="hintsCard">
       <h2>Підказки</h2>
-      <pre id="hints" class="hints">(підказки рахуються автоматично)</pre>
+      <div id="hints" class="hintsGrid">
+        <div class="small muted">(підказки рахуються автоматично)</div>
+      </div>
     </section>
   </main>
 
