@@ -22,10 +22,9 @@ FIXED_PLAYERS = ["Леви", "Тигри", "Ворони", "Акули", "Змі
 FIXED_SET = set(FIXED_PLAYERS)
 
 
-# # ===================== PostgreSQL persistence =====================
+# ===================== PostgreSQL persistence =====================
 
 DATABASE_URL = (os.getenv("DATABASE_URL", "") or "").strip()
-ALLOW_NO_DB = (os.getenv("ALLOW_NO_DB", "") or "").strip().lower() in ("1","true","yes")
 
 ROOM_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS room_state (
@@ -43,47 +42,6 @@ DO UPDATE SET state = EXCLUDED.state, updated_at = now();
 """
 
 SELECT_SQL = "SELECT state FROM room_state WHERE room_id=%s;"
-
-
-def _normalize_database_url(url: str) -> str:
-    """Fix common mistakes and ensure sslmode=require is present.
-
-    - Converts '/postgres&sslmode=require' -> '/postgres?sslmode=require'
-    - If someone appended parameters to the path with '&', moves them into query.
-    - Ensures sslmode=require exists (adds with '?' or '&' depending on existing query).
-    """
-    if not url:
-        return url
-    try:
-        p = urlparse(url)
-        path = p.path or ""
-        query = p.query or ""
-
-        # If query params were mistakenly appended to PATH with '&' (no '?'), fix it.
-        if "&" in path and "?" not in path:
-            base_path, extra = path.split("&", 1)
-            path = base_path
-            query = (query + "&" if query else "") + extra
-
-        # Ensure sslmode=require
-        if "sslmode=" not in query:
-            query = (query + "&" if query else "") + "sslmode=require"
-
-        new_p = ParseResult(
-            scheme=p.scheme,
-            netloc=p.netloc,
-            path=path,
-            params=p.params,
-            query=query,
-            fragment=p.fragment,
-        )
-        return urlunparse(new_p)
-    except Exception:
-        # Fallback: just append sslmode safely
-        if "sslmode=" in url:
-            return url
-        joiner = "&" if "?" in url else "?"
-        return url + f"{joiner}sslmode=require"
 
 
 def _prefer_ipv4_database_url(url: str) -> str:
@@ -130,16 +88,17 @@ def _prefer_ipv4_database_url(url: str) -> str:
 
 
 def _db_connect():
-    url = _prefer_ipv4_database_url(_normalize_database_url(DATABASE_URL))
+    url = _prefer_ipv4_database_url(DATABASE_URL)
+    if url and "sslmode=" not in url:
+        joiner = "&" if "?" in url else "?"
+        url = url + f"{joiner}sslmode=require"
     return psycopg.connect(url, autocommit=True)
 
 
 def _db_init_sync():
     if not DATABASE_URL:
-        if ALLOW_NO_DB:
-            print("DB: DATABASE_URL not set -> persistence disabled")
-            return
-        raise RuntimeError("DB: DATABASE_URL not set (persistence required)")
+        print("DB: DATABASE_URL not set -> persistence disabled")
+        return
     with _db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(ROOM_TABLE_SQL)
@@ -172,11 +131,11 @@ def _db_save_room_sync(room_id: str, state: dict) -> None:
 
 async def db_init():
     if not DATABASE_URL:
-        if ALLOW_NO_DB:
-            return
-        raise RuntimeError("DB: DATABASE_URL not set (persistence required)")
-    # Fail hard if DB cannot be reached; otherwise game would run in RAM and state would be lost.
-    await asyncio.to_thread(_db_init_sync)
+        return
+    try:
+        await asyncio.to_thread(_db_init_sync)
+    except Exception as e:
+        print(f"DB: init failed -> running WITHOUT persistence. Error: {e}")
 
 
 async def db_load_room(room_id: str) -> Optional[dict]:
@@ -878,6 +837,12 @@ async def ws_endpoint(ws: WebSocket):
                         continue
 
                     cards_tuples = [lookup[cid].as_tuple() for cid in card_ids]
+                    # Заборона: в одній комбінації не можна мати дві однакові карти (rank+suit)
+                    # (Дублікати в руці дозволені — різні колоди, але в одній комбінації однакові rank+suit заборонені)
+                    if len(set(cards_tuples)) != len(cards_tuples):
+                        await ws.send_text(json.dumps({"type": "error", "message": "В одній комбінації не можна використовувати дві однакові карти (rank+suit)"}, ensure_ascii=False))
+                        continue
+
                     cat, tb, label = eval_strict(cards_tuples)
                     cards_text = [lookup[cid].as_text() for cid in card_ids]
 
@@ -913,7 +878,7 @@ async def ws_endpoint(ws: WebSocket):
                     needs_save = True
 
                 elif t == "hints":
-                    hand_cards = [c.as_tuple() for c in player.hand]
+                    hand_cards = list(dict.fromkeys([c.as_tuple() for c in player.hand]))
                     pq = find_pairs_trips_quads(hand_cards)
                     straights = find_straights_5(hand_cards)
                     flushes = find_flushes_5plus(hand_cards)
