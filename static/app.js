@@ -13,6 +13,127 @@ const toast = (msg) => {
   setTimeout(() => { el("toast").textContent = ""; }, 3500);
 };
 
+
+function setSaveInfoFromState(st){
+  const v = st && (st.last_saved_ms || st.lastSavedMs || st.last_saved || 0);
+  const elSave = document.getElementById("saveInfo");
+  if (!elSave) return;
+  if (!v) { elSave.textContent = "Saved: —"; return; }
+  const d = new Date(v);
+  elSave.textContent = "Saved: " + d.toLocaleTimeString();
+}
+
+/* ------------------ saves (snapshots) ------------------ */
+function requestSavesList(){
+  if (!ws || ws.readyState !== 1) return;
+  send({type:"saves_list"});
+}
+function renderSavesList(items){
+  const box = el("savesList");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!items || !items.length){
+    const div = document.createElement("div");
+    div.className = "small muted";
+    div.textContent = "(збережень поки нема)";
+    box.appendChild(div);
+    return;
+  }
+  for (const it of items){
+    const row = document.createElement("div");
+    row.className = "saveRow";
+
+    const meta = document.createElement("div");
+    meta.className = "saveMeta";
+
+    const name = document.createElement("div");
+    name.className = "saveName";
+    name.textContent = it.name || it.save_name || it.id || "—";
+
+    const sub = document.createElement("div");
+    sub.className = "saveSub";
+    const ts = it.ts_ms || it.created_ms || it.created_at_ms || 0;
+    sub.textContent = ts ? ("#" + (it.id ?? "") + " • " + new Date(ts).toLocaleString()) : ("#" + (it.id ?? ""));
+
+    meta.appendChild(name);
+    meta.appendChild(sub);
+
+    const actions = document.createElement("div");
+    actions.className = "saveActions";
+
+    const loadBtn = document.createElement("button");
+    loadBtn.className = "secondary";
+    loadBtn.textContent = "Завантажити";
+    loadBtn.onclick = () => send({type:"load_save", id: it.id});
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "danger";
+    delBtn.textContent = "Видалити";
+    delBtn.onclick = () => {
+      if (!confirm("Видалити збереження?")) return;
+      send({type:"delete_save", id: it.id});
+      // refresh after a moment
+      setTimeout(requestSavesList, 200);
+    };
+
+    actions.appendChild(loadBtn);
+    actions.appendChild(delBtn);
+
+    row.appendChild(meta);
+    row.appendChild(actions);
+    box.appendChild(row);
+  }
+}
+
+/* ------------------ hints rendering (wide blocks) ------------------ */
+function renderHintsBlocks(msg){
+  const root = el("hints");
+  if (!root) return;
+  root.innerHTML = "";
+
+  const makeBlock = (title, items) => {
+    const b = document.createElement("div");
+    b.className = "hintBlock";
+
+    const h = document.createElement("div");
+    h.className = "hintTitle";
+    h.textContent = title;
+
+    const list = document.createElement("div");
+    list.className = "hintItems";
+
+    if (!items || !items.length){
+      const e = document.createElement("div");
+      e.className = "hintEmpty";
+      e.textContent = "(нема)";
+      list.appendChild(e);
+    } else {
+      for (const t of items){
+        const chip = document.createElement("span");
+        chip.className = "hintChip";
+        chip.textContent = t;
+        list.appendChild(chip);
+      }
+    }
+    b.appendChild(h);
+    b.appendChild(list);
+    return b;
+  };
+
+  // Order / titles match old UI
+  root.appendChild(makeBlock("Пари:", msg.pairs));
+  root.appendChild(makeBlock("Трійки:", msg.trips));
+  root.appendChild(makeBlock("Каре:", msg.quads));
+  root.appendChild(makeBlock("Стріти (5):", msg.straights5));
+  root.appendChild(makeBlock("Флеші (5):", msg.flushes5));
+
+  // Optional: show count
+  const info = document.createElement("div");
+  info.className = "small muted";
+  info.textContent = "Карт у руці: " + (msg.hand_count ?? "—");
+  root.prepend(info);
+}
+
 function setPidFromSeat() {
   const seat = el("seat").value;
   myPid = seat;
@@ -28,12 +149,12 @@ function setOnline(on) {
 
   el("dealMeBtn").disabled = !on;
   el("dealAllBtn").disabled = !on;
+  if (el("saveBtn")) el("saveBtn").disabled = !on;
+  if (el("refreshSavesBtn")) el("refreshSavesBtn").disabled = !on;
+  if (el("unknownBtn")) el("unknownBtn").disabled = !on;
   el("clearHandBtn").disabled = !on;
-  el("addUnknownBtn").disabled = !on;
   el("removeSelectedBtn").disabled = !on;
   el("evalBtn").disabled = !on;
-  el("saveCurrentBtn").disabled = !on;
-  el("refreshSavesBtn").disabled = !on;
 
   el("playBtn").disabled = !on;
   el("endRoundBtn").disabled = !on;
@@ -353,6 +474,7 @@ function renderRoundStatus(){
 /* ------------------ main render ------------------ */
 function render(){
   if (!state) return;
+  setSaveInfoFromState(state);
 
   const used = myUsedCardIds();
 
@@ -450,6 +572,7 @@ function connect(){
       el("status").textContent = `онлайн (кімната: ${msg.room})`;
       setOnline(true);
       requestHintsSoon();
+      requestSavesList();
       return;
     }
     if (msg.type === "state"){
@@ -463,23 +586,41 @@ function connect(){
       return;
     }
     if (msg.type === "hints_result"){
-      const lines = [];
-      lines.push(`Карт у руці: ${msg.count}\n`);
-      const block = (title, arr)=>{
-        lines.push(title);
-        if (!arr.length) lines.push("  (нема)");
-        else arr.slice(0,30).forEach(x => lines.push("  " + x.join(" ")));
-        lines.push("");
-      };
-      block("Пари:", msg.pairs);
-      block("Трійки:", msg.trips);
-      block("Каре:", msg.quads);
-      block("Стріти (5):", msg.straights5);
-      block("Флеші (5):", msg.flushes5);
-      el("hints").textContent = lines.join("\n");
+      renderHintsBlocks({
+        pairs: msg.pairs || [],
+        trips: msg.trips || [],
+        quads: msg.quads || [],
+        straights5: msg.straights5 || [],
+        flushes5: msg.flushes5 || [],
+        hand_count: msg.count
+      });
       return;
     }
-    if (msg.type === "round_result"){
+    
+    if (msg.type === "saves_list"){
+      // expected: msg.items (array)
+      renderSavesList(msg.items || msg.saves || []);
+      return;
+    }
+    if (msg.type === "save_done"){
+      toast("Збережено ✅");
+      requestSavesList();
+      return;
+    }
+    if (msg.type === "save_deleted"){
+      toast("Видалено 🗑");
+      requestSavesList();
+      return;
+    }
+    if (msg.type === "save_loaded"){
+      toast("Завантажено ✅");
+      // request fresh state + hints
+      send({type:"state"});
+      requestHintsSoon();
+      requestSavesList();
+      return;
+    }
+if (msg.type === "round_result"){
       toast(`Раунд #${msg.round.round} завершено`);
       return;
     }
@@ -573,67 +714,24 @@ el("forceEndRoundBtn").onclick = ()=>{
   send({ type: "end_round_force" });
 };
 
+/* ------------------ saves UI ------------------ */
+if (el("saveBtn")){
+  el("saveBtn").onclick = ()=>{
+    const name = (el("saveName")?.value || "").trim();
+    send({type:"save_current", name});
+    setTimeout(requestSavesList, 200);
+  };
+}
+if (el("refreshSavesBtn")){
+  el("refreshSavesBtn").onclick = ()=> requestSavesList();
+}
+
+/* ------------------ unknown card ------------------ */
+if (el("unknownBtn")){
+  el("unknownBtn").onclick = ()=> send({type:"add_unknown"});
+}
+
 /* ------------------ init ------------------ */
 setOnline(false);
 setupSuitPickers();
 setPidFromSeat();
-
-function requestSavesList() {
-  if (!ws) return;
-  ws.send(JSON.stringify({type: "saves_list"}));
-}
-
-function renderSavesList(saves) {
-  const wrap = el("savesList");
-  wrap.innerHTML = "";
-  if (!saves || saves.length === 0) {
-    wrap.innerHTML = '<div class="small">Немає збережень.</div>';
-    return;
-  }
-  for (const s of saves) {
-    const row = document.createElement("div");
-    row.className = "saveRow";
-    const name = document.createElement("div");
-    name.className = "name";
-    const dt = s.created_ms ? new Date(s.created_ms).toLocaleString() : "";
-    name.textContent = `${s.name} (${dt})`;
-    const loadBtn = document.createElement("button");
-    loadBtn.textContent = "Завантажити";
-    loadBtn.onclick = () => {
-      if (!ws) return;
-      ws.send(JSON.stringify({type: "load_save", save_id: s.id}));
-    };
-    const delBtn = document.createElement("button");
-    delBtn.textContent = "Видалити";
-    delBtn.onclick = () => {
-      if (!ws) return;
-      if (!confirm("Видалити це збереження?")) return;
-      ws.send(JSON.stringify({type: "delete_save", save_id: s.id}));
-      setTimeout(requestSavesList, 400);
-    };
-    row.appendChild(name);
-    row.appendChild(loadBtn);
-    row.appendChild(delBtn);
-    wrap.appendChild(row);
-  }
-}
-
-el("addUnknownBtn").addEventListener("click", () => {
-  if (!ws) return;
-  ws.send(JSON.stringify({type: "add_unknown_card"}));
-});
-
-el("saveCurrentBtn").addEventListener("click", () => {
-  if (!ws) return;
-  const name = (el("saveName").value || "").trim();
-  ws.send(JSON.stringify({type: "save_current", name}));
-  el("saveStatus").textContent = "Збереження...";
-  setTimeout(() => {
-    requestSavesList();
-    el("saveStatus").textContent = "Збережено";
-  }, 700);
-});
-
-el("refreshSavesBtn").addEventListener("click", () => {
-  requestSavesList();
-});
