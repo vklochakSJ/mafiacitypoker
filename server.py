@@ -736,7 +736,15 @@ async def ws_endpoint(ws: WebSocket):
                     needs_save = True
 
                 elif t == "add_manual":
-                    ctxt = msg.get("card", "")
+                    ctxt = (msg.get("card", "") or "").strip()
+
+                    # ✅ Allow adding an "unknown/empty" card for later use.
+                    # We represent it as rank="?" suit="" so it renders as "?".
+                    if ctxt in ("?", "??", "UNKNOWN", "unknown", "невідома", "пусто"):
+                        player.hand.append(room.new_card("?", ""))
+                        needs_save = True
+                        continue
+
                     parsed = parse_card_text(ctxt)
                     if parsed is None:
                         await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
@@ -754,7 +762,11 @@ async def ws_endpoint(ws: WebSocket):
                     if not isinstance(card_ids, list):
                         await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    card_ids = [int(x) for x in card_ids]
+                    try:
+                        card_ids = [int(x) for x in card_ids]
+                    except Exception:
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має містити лише числа"}, ensure_ascii=False))
+                        continue
                     if not card_ids:
                         continue
 
@@ -785,7 +797,11 @@ async def ws_endpoint(ws: WebSocket):
                     if not isinstance(card_ids, list):
                         await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    card_ids = [int(x) for x in card_ids]
+                    try:
+                        card_ids = [int(x) for x in card_ids]
+                    except Exception:
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має містити лише числа"}, ensure_ascii=False))
+                        continue
                     if not (2 <= len(card_ids) <= 5):
                         await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
@@ -821,7 +837,11 @@ async def ws_endpoint(ws: WebSocket):
                     if not isinstance(card_ids, list):
                         await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    card_ids = [int(x) for x in card_ids]
+                    try:
+                        card_ids = [int(x) for x in card_ids]
+                    except Exception:
+                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має містити лише числа"}, ensure_ascii=False))
+                        continue
                     if not (2 <= len(card_ids) <= 5):
                         await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
