@@ -741,6 +741,27 @@ async def ws_endpoint(ws: WebSocket):
                     player.hand.append(room.new_card("?", "?"))
                     needs_save = True
 
+               elif t == "add_manual":
+                card_text = (msg.get("card") or "").strip()
+
+                         # підтримка невідомої карти
+                 if card_text in ("?", "??", "unknown", "невідома", "пусто"):
+                 player.hand.append(room.new_card("?", "?"))
+               needs_save = True
+               continue
+
+    parsed = parse_card_text(card_text)
+    if not parsed:
+        await ws.send_text(json.dumps({
+            "type": "error",
+            "message": "Некоректний формат карти"
+        }, ensure_ascii=False))
+        continue
+
+    rank, suit = parsed
+    player.hand.append(room.new_card(rank, suit))
+    needs_save = True
+              
                 elif t == "clear_hand":
                     player.hand.clear()
                     needs_save = True
@@ -961,6 +982,7 @@ async def ws_endpoint(ws: WebSocket):
                 room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
+
 
 
 
