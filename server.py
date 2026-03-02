@@ -772,7 +772,6 @@ async def ws_endpoint(ws: WebSocket):
                         await ws.send_text(json.dumps({"type": "error", "message": "В одній комбінації не можна використовувати дві однакові карти (rank+suit)"}, ensure_ascii=False))
                         continue
 
-\2
                     cat, tb, label = eval_strict(cards_tuples)
                     cards_text = [lookup[cid].as_text() for cid in card_ids]
 
@@ -852,5 +851,6 @@ async def ws_endpoint(ws: WebSocket):
                 room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
+
 
 
