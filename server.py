@@ -735,22 +735,10 @@ async def ws_endpoint(ws: WebSocket):
                             p.hand.append(room.new_card(r_, s_))
                     needs_save = True
 
-                elif t == "add_manual":
-                    ctxt = (msg.get("card", "") or "").strip()
-
-                    # ✅ Allow adding an "unknown/empty" card for later use.
-                    # We represent it as rank="?" suit="" so it renders as "?".
-                    if ctxt in ("?", "??", "UNKNOWN", "unknown", "невідома", "пусто"):
-                        player.hand.append(room.new_card("?", ""))
-                        needs_save = True
-                        continue
-
-                    parsed = parse_card_text(ctxt)
-                    if parsed is None:
-                        await ws.send_text(json.dumps({"type": "error", "message": f"Невірна карта: {ctxt}"}, ensure_ascii=False))
-                        continue
-                    r_, s_ = parsed
-                    player.hand.append(room.new_card(r_, s_))
+                elif t == "add_unknown":
+                    # Додає "пусту/невідому" карту. Вона може існувати в руці,
+                    # але НЕ може бути зіграна в комбінації та НЕ враховується в підказках.
+                    player.hand.append(room.new_card("?", "?"))
                     needs_save = True
 
                 elif t == "clear_hand":
@@ -762,34 +750,24 @@ async def ws_endpoint(ws: WebSocket):
                     if not isinstance(card_ids, list):
                         await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    try:
-                        card_ids = [int(x) for x in card_ids]
-                    except Exception:
-                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має містити лише числа"}, ensure_ascii=False))
-                        continue
-                    if not card_ids:
+
+                    parsed: List[int] = []
+                    for x in card_ids:
+                        try:
+                            parsed.append(int(x))
+                        except Exception:
+                            pass
+
+                    if not parsed:
                         continue
 
                     used = used_card_ids_in_round(room, player.pid)
-                    if any(cid in used for cid in card_ids):
-                        await ws.send_text(json.dumps({
-                            "type": "error",
-                            "message": "Не можна видаляти карту, яка вже використана у комбінації поточного раунду"
-                        }, ensure_ascii=False))
+                    if any(cid in used for cid in parsed):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Не можна видаляти карту, яка вже використана в поточному раунді"}, ensure_ascii=False))
                         continue
 
-                    before = len(player.hand)
-                    to_remove = set(card_ids)
+                    to_remove = set(parsed)
                     player.hand = [c for c in player.hand if c.id not in to_remove]
-                    after = len(player.hand)
-
-                    if after == before:
-                        await ws.send_text(json.dumps({
-                            "type": "error",
-                            "message": "Вибраних карт уже немає в руці"
-                        }, ensure_ascii=False))
-                        continue
-
                     needs_save = True
 
                 elif t == "eval_selected":
@@ -797,71 +775,119 @@ async def ws_endpoint(ws: WebSocket):
                     if not isinstance(card_ids, list):
                         await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    try:
-                        card_ids = [int(x) for x in card_ids]
-                    except Exception:
-                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має містити лише числа"}, ensure_ascii=False))
-                        continue
-                    if not (2 <= len(card_ids) <= 5):
+
+                    parsed: List[int] = []
+                    for x in card_ids:
+                        try:
+                            parsed.append(int(x))
+                        except Exception:
+                            pass
+
+                    lookup = {c.id: c for c in player.hand}
+                    if not parsed:
                         await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
                         continue
 
-                    used = used_card_ids_in_round(room, player.pid)
-                    if any(cid in used for cid in card_ids):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Ці карти вже зіграні в поточному раунді"}, ensure_ascii=False))
+                    missing = [cid for cid in parsed if cid not in lookup]
+                    if missing:
+                        await ws.send_text(json.dumps({"type": "error", "message": "Обрані карти не знайдені в руці"}, ensure_ascii=False))
                         continue
 
-                    lookup = {c.id: c for c in player.hand}
-                    if any(cid not in lookup for cid in card_ids):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
+                    cards = [lookup[cid] for cid in parsed]
+
+                    # Забороняємо невідомі/пусті карти в комбінації
+                    if any((c.rank not in RANKS) or (c.suit not in SUITS) for c in cards):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Невідомі (пусті) карти не можна використовувати в комбінаціях"}, ensure_ascii=False))
                         continue
 
-                    cards = [lookup[cid].as_tuple() for cid in card_ids]
-                    cat, tb, label = eval_strict(cards)
-                    await ws.send_text(json.dumps({
-                        "type": "eval_result",
-                        "cards": [card_str(c) for c in cards],
-                        "label": label,
-                        "cat": cat,
-                        "tb": tb,
-                    }, ensure_ascii=False))
+                    # Забороняємо дві однакові карти (rank+suit) в ОДНІЙ комбінації
+                    seen_rs = set()
+                    for c in cards:
+                        key = (c.rank, c.suit)
+                        if key in seen_rs:
+                            await ws.send_text(json.dumps({"type": "error", "message": "В одній комбінації не можна використовувати дві однакові карти (rank+suit)"}, ensure_ascii=False))
+                            break
+                        seen_rs.add(key)
+                    else:
+                        cards_tuples = [c.as_tuple() for c in cards]
+                        try:
+                            cat, tb, label = eval_strict(cards_tuples)
+                        except Exception as e:
+                            await ws.send_text(json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False))
+                            continue
+
+                        await ws.send_text(json.dumps({
+                            "type": "eval_result",
+                            "cards": [c.as_text() for c in cards],
+                            "cat": cat,
+                            "tb": list(tb),
+                            "label": label,
+                        }, ensure_ascii=False))
                     continue
 
                 elif t == "play_selected":
                     table = (msg.get("table") or "").strip()
                     if table not in TABLES:
-                        await ws.send_text(json.dumps({"type": "error", "message": "Невірний стіл"}, ensure_ascii=False))
+                        await ws.send_text(json.dumps({"type": "error", "message": "Оберіть коректний стіл"}, ensure_ascii=False))
                         continue
 
                     card_ids = msg.get("card_ids", [])
                     if not isinstance(card_ids, list):
                         await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
                         continue
-                    try:
-                        card_ids = [int(x) for x in card_ids]
-                    except Exception:
-                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має містити лише числа"}, ensure_ascii=False))
-                        continue
-                    if not (2 <= len(card_ids) <= 5):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Виберіть 2–5 карт"}, ensure_ascii=False))
+
+                    parsed: List[int] = []
+                    for x in card_ids:
+                        try:
+                            parsed.append(int(x))
+                        except Exception:
+                            pass
+
+                    if not (2 <= len(parsed) <= 5):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Потрібно 2–5 карт"}, ensure_ascii=False))
                         continue
 
                     lookup = {c.id: c for c in player.hand}
-                    if any(cid not in lookup for cid in card_ids):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Деяких карт уже немає в руці"}, ensure_ascii=False))
+                    missing = [cid for cid in parsed if cid not in lookup]
+                    if missing:
+                        await ws.send_text(json.dumps({"type": "error", "message": "Обрані карти не знайдені в руці"}, ensure_ascii=False))
+                        continue
+
+                    cards = [lookup[cid] for cid in parsed]
+
+                    # Забороняємо невідомі/пусті карти в комбінації
+                    if any((c.rank not in RANKS) or (c.suit not in SUITS) for c in cards):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Невідомі (пусті) карти не можна використовувати в комбінаціях"}, ensure_ascii=False))
+                        continue
+
+                    # Забороняємо дві однакові карти (rank+suit) в ОДНІЙ комбінації
+                    seen_rs = set()
+                    bad_dup = False
+                    for c in cards:
+                        key = (c.rank, c.suit)
+                        if key in seen_rs:
+                            bad_dup = True
+                            break
+                        seen_rs.add(key)
+                    if bad_dup:
+                        await ws.send_text(json.dumps({"type": "error", "message": "В одній комбінації не можна використовувати дві однакові карти (rank+suit)"}, ensure_ascii=False))
                         continue
 
                     used = used_card_ids_in_round(room, player.pid)
-                    if any(cid in used for cid in card_ids):
-                        await ws.send_text(json.dumps({"type": "error", "message": "Ці карти вже зіграні в поточному раунді"}, ensure_ascii=False))
+                    if any(cid in used for cid in parsed):
+                        await ws.send_text(json.dumps({"type": "error", "message": "Ці карти вже використані у поточному раунді"}, ensure_ascii=False))
                         continue
 
-                    cards_tuples = [lookup[cid].as_tuple() for cid in card_ids]
-                    cat, tb, label = eval_strict(cards_tuples)
-                    cards_text = [lookup[cid].as_text() for cid in card_ids]
+                    cards_tuples = [c.as_tuple() for c in cards]
+                    try:
+                        cat, tb, label = eval_strict(cards_tuples)
+                    except Exception as e:
+                        await ws.send_text(json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False))
+                        continue
+
+                    cards_text = [c.as_text() for c in cards]
 
                     room.ready_pids.discard(player.pid)
-
                     room.play_seq += 1
                     now_ms = int(time.time() * 1000)
 
@@ -869,7 +895,7 @@ async def ws_endpoint(ws: WebSocket):
                         pid=player.pid,
                         name=player.name,
                         table=table,
-                        card_ids=card_ids,
+                        card_ids=parsed,
                         cards_text=cards_text,
                         cat=cat,
                         tb=tb,
@@ -879,7 +905,6 @@ async def ws_endpoint(ws: WebSocket):
                     ))
 
                     needs_save = True
-
                 elif t == "end_round_vote":
                     room.ready_pids.add(player.pid)
                     rr = maybe_finish_round(room)
@@ -892,7 +917,7 @@ async def ws_endpoint(ws: WebSocket):
                     needs_save = True
 
                 elif t == "hints":
-                    hand_cards = [c.as_tuple() for c in player.hand]
+                    hand_cards = [c.as_tuple() for c in player.hand if (c.rank in RANKS and c.suit in SUITS)]
                     pq = find_pairs_trips_quads(hand_cards)
                     straights = find_straights_5(hand_cards)
                     flushes = find_flushes_5plus(hand_cards)
@@ -936,3 +961,6 @@ async def ws_endpoint(ws: WebSocket):
                 room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
+
+
+
