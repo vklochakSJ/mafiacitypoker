@@ -13,6 +13,48 @@ const toast = (msg) => {
   setTimeout(() => { el("toast").textContent = ""; }, 3500);
 };
 
+function renderHints(msg){
+  const hintsDiv = el("hints");
+  if (!hintsDiv) return;
+
+  hintsDiv.innerHTML = "";
+
+  const createBlock = (title, arr)=>{
+    const block = document.createElement("div");
+    block.className = "hintBlock";
+
+    const h = document.createElement("div");
+    h.className = "hintTitle";
+    h.textContent = title;
+    block.appendChild(h);
+
+    if (!arr || !arr.length){
+      const empty = document.createElement("div");
+      empty.className = "small muted";
+      empty.textContent = "(нема)";
+      block.appendChild(empty);
+    } else {
+      arr.slice(0, 30).forEach(x=>{
+        const line = document.createElement("div");
+        line.className = "small";
+        line.textContent = x.join(" ");
+        block.appendChild(line);
+      });
+    }
+
+    hintsDiv.appendChild(block);
+  };
+
+  // порядок як домовлялись
+  createBlock("Двійки (пари)", msg.pairs || []);
+  createBlock("Трійки", msg.trips || []);
+  createBlock("Каре", msg.quads || []);
+  createBlock("Флеші", msg.flushes5 || []);
+  createBlock("Стріти", msg.straights5 || []);
+  createBlock("Стріт-флеші", msg.straight_flushes5 || []);
+  createBlock("Роял-флеші", msg.royal_flushes || []);
+}
+
 function setPidFromSeat() {
   const seat = el("seat").value;
   myPid = seat;
@@ -43,7 +85,7 @@ function setOnline(on) {
   el("pickS").disabled = !on;
 
   // optional buttons (may not exist in some layouts)
-  const _addUnknownBtn = el("addUnknownBtn");
+  const _addUnknownBtn = el("unknownBtn") || el("addUnknownBtn") || el("addEmptyBtn") || el("addBlankBtn");
   if (_addUnknownBtn) _addUnknownBtn.disabled = !on;
   const _addEmptyBtn = el("addEmptyBtn");
   if (_addEmptyBtn) _addEmptyBtn.disabled = !on;
@@ -472,20 +514,7 @@ function connect(){
       return;
     }
     if (msg.type === "hints_result"){
-      const lines = [];
-      lines.push(`Карт у руці: ${msg.count}\n`);
-      const block = (title, arr)=>{
-        lines.push(title);
-        if (!arr.length) lines.push("  (нема)");
-        else arr.slice(0,30).forEach(x => lines.push("  " + x.join(" ")));
-        lines.push("");
-      };
-      block("Пари:", msg.pairs);
-      block("Трійки:", msg.trips);
-      block("Каре:", msg.quads);
-      block("Стріти (5):", msg.straights5);
-      block("Флеші (5):", msg.flushes5);
-      el("hints").textContent = lines.join("\n");
+      renderHints(msg);
       return;
     }
     if (msg.type === "round_result"){
@@ -526,7 +555,7 @@ el("connectBtn").onclick = connect;
 el("disconnectBtn").onclick = disconnect;
 
   // optional: add unknown/blank card
-  const addUnknownBtn = el("addUnknownBtn") || el("addEmptyBtn") || el("addBlankBtn");
+  const addUnknownBtn = el("unknownBtn") || el("addUnknownBtn") || el("addEmptyBtn") || el("addBlankBtn");
   if (addUnknownBtn) {
     addUnknownBtn.onclick = () => send({ type: "add_unknown" });
   }
