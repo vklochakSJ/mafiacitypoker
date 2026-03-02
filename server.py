@@ -333,6 +333,53 @@ def find_flushes_5plus(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str
             out.extend([list(x) for x in combos])
     return out
 
+def find_straight_flushes_5(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+    # Hand cards are (rank, suit). Duplicates may exist across multiple decks.
+    # For hints we only allow unique rank+suit inside each combo.
+    unique = list(set(hand_cards))
+    by_suit: Dict[str, List[Tuple[str, str]]] = {}
+    for r, s in unique:
+        by_suit.setdefault(s, []).append((r, s))
+
+    out: List[List[Tuple[str, str]]] = []
+    for s, cards in by_suit.items():
+        if len(cards) < 5:
+            continue
+        # map rank value -> rank (keep one per rank)
+        by_rank_val: Dict[int, str] = {}
+        for r, _ in cards:
+            by_rank_val.setdefault(RANK_VALUE[r], r)
+
+        vals = sorted(by_rank_val.keys())
+        vals_set = set(vals)
+
+        # normal sequences 5
+        for start in range(2, 11):
+            seq = [start, start+1, start+2, start+3, start+4]
+            if all(v in vals_set for v in seq):
+                out.append([(by_rank_val[v], s) for v in seq])
+
+        # wheel A2345
+        wheel = [14, 2, 3, 4, 5]
+        if all(v in vals_set for v in wheel):
+            out.append([(by_rank_val[v], s) for v in wheel])
+    return out
+
+
+def find_royal_flushes(hand_cards: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+    unique = list(set(hand_cards))
+    by_suit: Dict[str, Set[str]] = {}
+    for r, s in unique:
+        by_suit.setdefault(s, set()).add(r)
+
+    need = {"T", "J", "Q", "K", "A"}
+    out: List[List[Tuple[str, str]]] = []
+    for s, ranks in by_suit.items():
+        if need.issubset(ranks):
+            out.append([("T", s), ("J", s), ("Q", s), ("K", s), ("A", s)])
+    return out
+
+
 
 @dataclass
 class CardInst:
@@ -934,18 +981,27 @@ async def ws_endpoint(ws: WebSocket):
                     needs_save = True
 
                 elif t == "hints":
-                    hand_cards = [c.as_tuple() for c in player.hand if (c.rank in RANKS and c.suit in SUITS)]
+                    # Підказки рахуються по унікальних rank+suit (дублі з різних колод дозволені в руці,
+                    # але в одній комбінації не може бути двох однакових карт).
+                    raw_cards = [c.as_tuple() for c in player.hand if (c.rank in RANKS and c.suit in SUITS)]
+                    hand_cards = list(set(raw_cards))
+
                     pq = find_pairs_trips_quads(hand_cards)
                     straights = find_straights_5(hand_cards)
                     flushes = find_flushes_5plus(hand_cards)
+                    straight_flushes = find_straight_flushes_5(hand_cards)
+                    royal_flushes = find_royal_flushes(hand_cards)
+
                     await ws.send_text(json.dumps({
                         "type": "hints_result",
                         "count": len(player.hand),
                         "pairs": [[card_str(c) for c in x] for x in pq["pairs"][:30]],
                         "trips": [[card_str(c) for c in x] for x in pq["trips"][:30]],
                         "quads": [[card_str(c) for c in x] for x in pq["quads"][:30]],
-                        "straights5": [[card_str(c) for c in x] for x in straights[:30]],
                         "flushes5": [[card_str(c) for c in x] for x in flushes[:30]],
+                        "straights5": [[card_str(c) for c in x] for x in straights[:30]],
+                        "straight_flushes5": [[card_str(c) for c in x] for x in straight_flushes[:30]],
+                        "royal_flushes": [[card_str(c) for c in x] for x in royal_flushes[:30]],
                     }, ensure_ascii=False))
                     continue
 
@@ -978,7 +1034,4 @@ async def ws_endpoint(ws: WebSocket):
                 room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
-
-
-
 
