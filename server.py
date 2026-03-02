@@ -754,7 +754,7 @@ async def ws_endpoint(ws: WebSocket):
                     if not card_ids:
                         continue
 
-                    used = used_card_ids_in_round(room, player.pid)\1                    # Забороняємо невідомі/пусті карти в комбінації
+                    used = used_card_ids_in_round(room, player.pid)                    # Забороняємо невідомі/пусті карти в комбінації
                     if any((lookup[cid].rank not in RANKS) or (lookup[cid].suit not in SUITS) for cid in card_ids):
                         await ws.send_text(json.dumps({"type": "error", "message": "Невідомі (пусті) карти не можна використовувати в комбінаціях"}, ensure_ascii=False))
                         continue
@@ -852,4 +852,5 @@ async def ws_endpoint(ws: WebSocket):
                 room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
+
 
