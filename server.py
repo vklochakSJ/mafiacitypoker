@@ -735,7 +735,7 @@ async def ws_endpoint(ws: WebSocket):
                             p.hand.append(room.new_card(r_, s_))
                     needs_save = True
 
-                \1elif t == "add_unknown":
+                elif t == "add_unknown":
                     # Додає "пусту/невідому" карту. Вона може існувати в руці,
                     # але НЕ може бути зіграна в комбінації та НЕ враховується в підказках.
                     player.hand.append(room.new_card("?", "?"))
@@ -852,3 +852,4 @@ async def ws_endpoint(ws: WebSocket):
                 room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
+
