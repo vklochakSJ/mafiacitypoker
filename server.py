@@ -741,27 +741,23 @@ async def ws_endpoint(ws: WebSocket):
                     player.hand.append(room.new_card("?", "?"))
                     needs_save = True
 
-               elif t == "add_manual":
-                card_text = (msg.get("card") or "").strip()
+                elif t == "add_manual":
+                    card_text = (msg.get("card") or "").strip()
 
-                         # підтримка невідомої карти
-                 if card_text in ("?", "??", "unknown", "невідома", "пусто"):
-                 player.hand.append(room.new_card("?", "?"))
-               needs_save = True
-               continue
+                    # підтримка невідомої карти через manual add
+                    if card_text in ("?", "??", "unknown", "невідома", "пусто"):
+                        player.hand.append(room.new_card("?", "?"))
+                        needs_save = True
+                        continue
 
-    parsed = parse_card_text(card_text)
-    if not parsed:
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "message": "Некоректний формат карти"
-        }, ensure_ascii=False))
-        continue
+                    parsed_card = parse_card_text(card_text)
+                    if not parsed_card:
+                        await ws.send_text(json.dumps({"type": "error", "message": "Некоректний формат карти"}, ensure_ascii=False))
+                        continue
 
-    rank, suit = parsed
-    player.hand.append(room.new_card(rank, suit))
-    needs_save = True
-              
+                    rank, suit = parsed_card
+                    player.hand.append(room.new_card(rank, suit))
+                    needs_save = True
                 elif t == "clear_hand":
                     player.hand.clear()
                     needs_save = True
