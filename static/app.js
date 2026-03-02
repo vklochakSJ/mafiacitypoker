@@ -42,6 +42,14 @@ function setOnline(on) {
   el("pickH").disabled = !on;
   el("pickS").disabled = !on;
 
+  // optional buttons (may not exist in some layouts)
+  const _addUnknownBtn = el("addUnknownBtn");
+  if (_addUnknownBtn) _addUnknownBtn.disabled = !on;
+  const _addEmptyBtn = el("addEmptyBtn");
+  if (_addEmptyBtn) _addEmptyBtn.disabled = !on;
+  const _addBlankBtn = el("addBlankBtn");
+  if (_addBlankBtn) _addBlankBtn.disabled = !on;
+
   el("newTabBtn").disabled = on;
 }
 
@@ -52,7 +60,7 @@ function wsUrl() {
 
 function send(obj) {
   if (!ws || ws.readyState !== 1) {
-    try { toast("Немає з'єднання з сервером"); } catch(e) {}
+    toast("Немає з’єднання з сервером");
     return false;
   }
   ws.send(JSON.stringify(obj));
@@ -119,15 +127,13 @@ function fillSuitSelect(selectEl){
 }
 function setupSuitPickers(){
   const pickC = el("pickC"), pickD = el("pickD"), pickH = el("pickH"), pickS = el("pickS");
-  if (!pickC || !pickD || !pickH || !pickS) return;
   [pickC,pickD,pickH,pickS].forEach(fillSuitSelect);
 
   const onPick = (suit, picker) => {
     const r = picker.value;
     if (!r) return;
-    if (send({ type:"add_manual", card: `${r}${suit}` })) {
-      picker.value = "";
-    }
+    send({ type:"add_manual", card: `${r}${suit}` });
+    picker.value = "";
   };
   pickC.onchange = () => onPick("♣", pickC);
   pickD.onchange = () => onPick("♦", pickD);
@@ -518,6 +524,13 @@ function selectedIdList(){
 
 el("connectBtn").onclick = connect;
 el("disconnectBtn").onclick = disconnect;
+
+  // optional: add unknown/blank card
+  const addUnknownBtn = el("addUnknownBtn") || el("addEmptyBtn") || el("addBlankBtn");
+  if (addUnknownBtn) {
+    addUnknownBtn.onclick = () => send({ type: "add_unknown" });
+  }
+
 
 el("newTabBtn").onclick = ()=>{
   window.open(window.location.href, "_blank");
