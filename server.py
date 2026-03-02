@@ -746,13 +746,29 @@ async def ws_endpoint(ws: WebSocket):
                     needs_save = True
 
                 elif t == "remove_selected":
-                    card_ids = msg.get("card_ids", [])
-                    if not isinstance(card_ids, list):
-                        await ws.send_text(json.dumps({"type": "error", "message": "card_ids має бути списком"}, ensure_ascii=False))
-                        continue
-                    card_ids = [int(x) for x in card_ids]
-                    if not card_ids:
-                        continue
+    card_ids = msg.get("card_ids", [])
+    if not isinstance(card_ids, list):
+        await ws.send_text(json.dumps({
+            "type": "error",
+            "message": "card_ids має бути списком"
+        }, ensure_ascii=False))
+        continue
+
+    card_ids = [int(x) for x in card_ids]
+    if not card_ids:
+        continue
+
+    # не можна видаляти карти, які вже використані в поточному раунді
+    used = used_card_ids_in_round(room, player.pid)
+    if any(cid in used for cid in card_ids):
+        await ws.send_text(json.dumps({
+            "type": "error",
+            "message": "Не можна видаляти карту, яка вже використана в раунді"
+        }, ensure_ascii=False))
+        continue
+
+    player.hand = [c for c in player.hand if c.id not in card_ids]
+    needs_save = True
 
                     used = used_card_ids_in_round(room, player.pid)                    # Забороняємо невідомі/пусті карти в комбінації
                     if any((lookup[cid].rank not in RANKS) or (lookup[cid].suit not in SUITS) for cid in card_ids):
@@ -851,6 +867,7 @@ async def ws_endpoint(ws: WebSocket):
                 room.ready_pids.discard(pid)
                 await persist_room(room)
                 await broadcast(room)
+
 
 
 
