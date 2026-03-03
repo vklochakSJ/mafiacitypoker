@@ -337,3 +337,59 @@ hr{
 .hintsGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;align-items:start;}
 .hintBlock{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px;}
 .hintTitle{font-weight:700;margin-bottom:8px;}
+
+/* ============================= */
+/*        HINTS LAYOUT          */
+/* ============================= */
+
+/* Розтягуємо блок підказок на всю ширину */
+#hintsCard {
+  grid-column: 1 / -1;
+}
+
+/* Сітка підказок — кілька колонок */
+.hintsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+  width: 100%;
+}
+
+/* Кожен блок підказки */
+.hintBlock {
+  background: #1c1c1c;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Заголовок блоку */
+.hintTitle {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 10px;
+  color: #f5c542;
+  border-bottom: 1px solid #2a2a2a;
+  padding-bottom: 6px;
+}
+
+/* Текст варіантів */
+.hintBlock .small {
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+/* Адаптивність */
+@media (max-width: 900px) {
+  .hintsGrid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .hintsGrid {
+    grid-template-columns: 1fr;
+  }
+}
