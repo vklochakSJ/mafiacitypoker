@@ -9,13 +9,18 @@ let selectedCardIds = new Set();
 const el = (id) => document.getElementById(id);
 
 const toast = (msg) => {
-  el("toast").textContent = msg;
-  setTimeout(() => { el("toast").textContent = ""; }, 3500);
+  const t = el("toast");
+  if (!t) return;
+  t.textContent = msg;
+  setTimeout(() => { t.textContent = ""; }, 3500);
 };
 
 function renderHints(msg){
   const hintsDiv = el("hints");
   if (!hintsDiv) return;
+
+  // важливо: щоб CSS-колонки працювали
+  hintsDiv.classList.add("hintsGrid");
 
   hintsDiv.innerHTML = "";
 
@@ -56,43 +61,46 @@ function renderHints(msg){
 }
 
 function setPidFromSeat() {
-  const seat = el("seat").value;
+  const seatEl = el("seat");
+  if (!seatEl) return;
+  const seat = seatEl.value;
   myPid = seat;
   sessionStorage.setItem(PID_KEY, myPid);
-  el("pid").textContent = myPid;
+  const pidEl = el("pid");
+  if (pidEl) pidEl.textContent = myPid;
 }
 
 function setOnline(on) {
-  el("connectBtn").disabled = on;
-  el("disconnectBtn").disabled = !on;
-  el("seat").disabled = on;
-  el("room").disabled = on;
+  if (el("connectBtn")) el("connectBtn").disabled = on;
+  if (el("disconnectBtn")) el("disconnectBtn").disabled = !on;
+  if (el("seat")) el("seat").disabled = on;
+  if (el("room")) el("room").disabled = on;
 
-  el("dealMeBtn").disabled = !on;
-  el("dealAllBtn").disabled = !on;
-  el("clearHandBtn").disabled = !on;
-  el("removeSelectedBtn").disabled = !on;
-  el("evalBtn").disabled = !on;
+  if (el("dealMeBtn")) el("dealMeBtn").disabled = !on;
+  if (el("dealAllBtn")) el("dealAllBtn").disabled = !on;
+  if (el("clearHandBtn")) el("clearHandBtn").disabled = !on;
+  if (el("removeSelectedBtn")) el("removeSelectedBtn").disabled = !on;
+  if (el("evalBtn")) el("evalBtn").disabled = !on;
 
-  el("playBtn").disabled = !on;
-  el("endRoundBtn").disabled = !on;
-  el("forceEndRoundBtn").disabled = !on;
-  el("tableSelect").disabled = !on;
+  if (el("playBtn")) el("playBtn").disabled = !on;
+  if (el("endRoundBtn")) el("endRoundBtn").disabled = !on;
+  if (el("forceEndRoundBtn")) el("forceEndRoundBtn").disabled = !on;
+  if (el("tableSelect")) el("tableSelect").disabled = !on;
 
-  el("pickC").disabled = !on;
-  el("pickD").disabled = !on;
-  el("pickH").disabled = !on;
-  el("pickS").disabled = !on;
+  if (el("pickC")) el("pickC").disabled = !on;
+  if (el("pickD")) el("pickD").disabled = !on;
+  if (el("pickH")) el("pickH").disabled = !on;
+  if (el("pickS")) el("pickS").disabled = !on;
 
   // optional buttons (may not exist in some layouts)
   const _addUnknownBtn = el("unknownBtn") || el("addUnknownBtn") || el("addEmptyBtn") || el("addBlankBtn");
   if (_addUnknownBtn) _addUnknownBtn.disabled = !on;
-  const _addEmptyBtn = el("addEmptyBtn");
-  if (_addEmptyBtn) _addEmptyBtn.disabled = !on;
-  const _addBlankBtn = el("addBlankBtn");
-  if (_addBlankBtn) _addBlankBtn.disabled = !on;
 
-  el("newTabBtn").disabled = on;
+  // ✅ Знімки: активуємо кнопки якщо вони є
+  if (el("saveBtn")) el("saveBtn").disabled = !on;
+  if (el("refreshSavesBtn")) el("refreshSavesBtn").disabled = !on;
+
+  if (el("newTabBtn")) el("newTabBtn").disabled = on;
 }
 
 function wsUrl() {
@@ -156,6 +164,7 @@ function requestHintsSoon(){
 /* ------------------ suit dropdowns ------------------ */
 const RANKS_DESC = ["A","K","Q","J","T","9","8","7","6","5","4","3","2"];
 function fillSuitSelect(selectEl){
+  if (!selectEl) return;
   selectEl.innerHTML = "";
   const opt0 = document.createElement("option");
   opt0.value = ""; opt0.textContent = "—";
@@ -177,15 +186,18 @@ function setupSuitPickers(){
     send({ type:"add_manual", card: `${r}${suit}` });
     picker.value = "";
   };
-  pickC.onchange = () => onPick("♣", pickC);
-  pickD.onchange = () => onPick("♦", pickD);
-  pickH.onchange = () => onPick("♥", pickH);
-  pickS.onchange = () => onPick("♠", pickS);
+
+  if (pickC) pickC.onchange = () => onPick("♣", pickC);
+  if (pickD) pickD.onchange = () => onPick("♦", pickD);
+  if (pickH) pickH.onchange = () => onPick("♥", pickH);
+  if (pickS) pickS.onchange = () => onPick("♠", pickS);
 }
 
 /* ------------------ tables select ------------------ */
 function setupTablesSelect(){
   const sel = el("tableSelect");
+  if (!sel) return;
+
   sel.innerHTML = "";
   const opt0 = document.createElement("option");
   opt0.value = ""; opt0.textContent = "— оберіть стіл —";
@@ -214,10 +226,71 @@ function myUsedCardIds(){
   return used;
 }
 
+/* ------------------ SAVES (snapshots) ------------------ */
+
+function getSaveName(){
+  // підтримуємо різні можливі id в HTML
+  const inp = el("saveName") || el("saveNameInput") || el("saveTitle") || el("saveTitleInput");
+  return (inp && typeof inp.value === "string") ? inp.value.trim() : "";
+}
+
+function requestSavesList(){
+  send({ type: "saves_list" });
+}
+
+function renderSavesList(items){
+  const list = el("savesList");
+  if (!list) return;
+
+  list.innerHTML = "";
+
+  if (!items || !items.length){
+    const d = document.createElement("div");
+    d.className = "small muted";
+    d.textContent = "(збережень немає)";
+    list.appendChild(d);
+    return;
+  }
+
+  for (const s of items){
+    const row = document.createElement("div");
+    row.className = "item";
+
+    const title = document.createElement("div");
+    title.innerHTML = `<b>${s.name || "(без назви)"}</b> <span class="small muted">${s.created_at || ""}</span>`;
+    row.appendChild(title);
+
+    const btns = document.createElement("div");
+    btns.style.display = "flex";
+    btns.style.gap = "8px";
+    btns.style.marginTop = "8px";
+
+    const loadBtn = document.createElement("button");
+    loadBtn.className = "secondary";
+    loadBtn.textContent = "Завантажити";
+    loadBtn.onclick = () => send({ type: "load_save", save_id: s.id });
+    btns.appendChild(loadBtn);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "danger";
+    delBtn.textContent = "Видалити";
+    delBtn.onclick = () => {
+      if (!confirm("Видалити це збереження?")) return;
+      send({ type: "delete_save", save_id: s.id });
+    };
+    btns.appendChild(delBtn);
+
+    row.appendChild(btns);
+    list.appendChild(row);
+  }
+}
+
 /* ------------------ render blocks ------------------ */
 
 function renderOpponents(){
   const box = el("opponentHands");
+  if (!box) return;
+
   box.innerHTML = "";
   if (!state) return;
 
@@ -261,6 +334,8 @@ function renderOpponents(){
 
 function renderMyPending(){
   const box = el("myPending");
+  if (!box) return;
+
   box.innerHTML = "";
   if (!state) return;
 
@@ -333,6 +408,8 @@ function renderRoundWithAllPlays(container, roundObj){
 
 function renderLastRound(){
   const box = el("lastRound");
+  if (!box) return;
+
   if (!state || !state.last_round){
     box.innerHTML = `<div class="small">(ще немає завершених раундів)</div>`;
     return;
@@ -342,6 +419,8 @@ function renderLastRound(){
 
 function renderHistory(){
   const box = el("history");
+  if (!box) return;
+
   box.innerHTML = "";
   if (!state || !state.battle_history || !state.battle_history.length){
     box.innerHTML = `<div class="small">(історія порожня)</div>`;
@@ -363,7 +442,7 @@ function renderHistory(){
 
     for (const t of tables){
       const w = t.winner;
-      const wText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label}) #${w.placed_seq}` : "(нема)";
+      const wText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label}) #${w.placed_seq}` : "(нема)`;
 
       const head = document.createElement("div");
       head.className = "small";
@@ -398,7 +477,8 @@ function renderRoundStatus(){
   } else {
     text = `Готові: ${ready}/${active}` + (youReady ? " (ви підтвердили)" : "");
   }
-  el("roundStatus").textContent = text;
+  const rs = el("roundStatus");
+  if (rs) rs.textContent = text;
 }
 
 /* ------------------ main render ------------------ */
@@ -408,66 +488,70 @@ function render(){
   const used = myUsedCardIds();
 
   const playersDiv = el("players");
-  playersDiv.innerHTML = "";
-  state.players.forEach(p=>{
-    const d = document.createElement("div");
-    const you = p.pid === myPid ? " (ви)" : "";
-    d.className = "small";
-    d.textContent = `• ${p.name}${you} — карт у руці: ${(p.hand||[]).length}`;
-    playersDiv.appendChild(d);
-  });
+  if (playersDiv){
+    playersDiv.innerHTML = "";
+    state.players.forEach(p=>{
+      const d = document.createElement("div");
+      const you = p.pid === myPid ? " (ви)" : "";
+      d.className = "small";
+      d.textContent = `• ${p.name}${you} — карт у руці: ${(p.hand||[]).length}`;
+      playersDiv.appendChild(d);
+    });
+  }
 
   setupTablesSelect();
 
   const me = meFromState();
   const handDiv = el("hand");
-  handDiv.innerHTML = "";
+  if (handDiv){
+    handDiv.innerHTML = "";
 
-  if (me){
-    const myHand = me.hand || [];
-    const myIds = new Set(myHand.map(x => x.id));
-    selectedCardIds = new Set([...selectedCardIds].filter(id => myIds.has(id)));
+    if (me){
+      const myHand = me.hand || [];
+      const myIds = new Set(myHand.map(x => x.id));
+      selectedCardIds = new Set([...selectedCardIds].filter(id => myIds.has(id)));
 
-    const groups = groupHand(myHand);
-    for (const g of groups){
-      const idsFree = g.ids.filter(id => !used.has(id));
-      const idsLocked = g.ids.filter(id => used.has(id));
-      const selCount = g.ids.filter(id => selectedCardIds.has(id)).length;
+      const groups = groupHand(myHand);
+      for (const g of groups){
+        const idsFree = g.ids.filter(id => !used.has(id));
+        const idsLocked = g.ids.filter(id => used.has(id));
+        const selCount = g.ids.filter(id => selectedCardIds.has(id)).length;
 
-      const b = document.createElement("div");
-      const isAllLocked = idsFree.length === 0;
+        const b = document.createElement("div");
+        const isAllLocked = idsFree.length === 0;
 
-      b.className =
-        "cardbtn"
-        + (isRedSuit(g.card) ? " red" : "")
-        + (selCount>0 ? " selected" : "")
-        + (isAllLocked ? " locked" : "");
+        b.className =
+          "cardbtn"
+          + (isRedSuit(g.card) ? " red" : "")
+          + (selCount>0 ? " selected" : "")
+          + (isAllLocked ? " locked" : "");
 
-      b.textContent = g.card;
+        b.textContent = g.card;
 
-      if (g.ids.length > 1){
-        const badge = document.createElement("div");
-        badge.className = "badge";
-        badge.textContent = String(g.ids.length);
-        b.appendChild(badge);
-      }
-
-      b.onclick = ()=>{
-        if (idsFree.length === 0) return;
-
-        for (const id of idsLocked) selectedCardIds.delete(id);
-
-        const selectedHereFree = idsFree.filter(id => selectedCardIds.has(id));
-        if (selectedHereFree.length < idsFree.length){
-          const next = idsFree.find(id => !selectedCardIds.has(id));
-          if (next !== undefined) selectedCardIds.add(next);
-        } else {
-          idsFree.forEach(id => selectedCardIds.delete(id));
+        if (g.ids.length > 1){
+          const badge = document.createElement("div");
+          badge.className = "badge";
+          badge.textContent = String(g.ids.length);
+          b.appendChild(badge);
         }
-        render();
-      };
 
-      handDiv.appendChild(b);
+        b.onclick = ()=>{
+          if (idsFree.length === 0) return;
+
+          for (const id of idsLocked) selectedCardIds.delete(id);
+
+          const selectedHereFree = idsFree.filter(id => selectedCardIds.has(id));
+          if (selectedHereFree.length < idsFree.length){
+            const next = idsFree.find(id => !selectedCardIds.has(id));
+            if (next !== undefined) selectedCardIds.add(next);
+          } else {
+            idsFree.forEach(id => selectedCardIds.delete(id));
+          }
+          render();
+        };
+
+        handDiv.appendChild(b);
+      }
     }
   }
 
@@ -477,7 +561,8 @@ function render(){
   renderHistory();
   renderRoundStatus();
 
-  el("pid").textContent = myPid || "(нема)";
+  const pidEl = el("pid");
+  if (pidEl) pidEl.textContent = myPid || "(нема)";
 }
 
 /* ------------------ connect ------------------ */
@@ -486,11 +571,11 @@ function connect(){
 
   setPidFromSeat();
 
-  const room = el("room").value.trim() || "default";
-  const seat = el("seat").value;
+  const room = (el("room")?.value || "").trim() || "default";
+  const seat = el("seat")?.value || "";
 
   ws = new WebSocket(wsUrl());
-  el("status").textContent = "підключення…";
+  if (el("status")) el("status").textContent = "підключення…";
 
   ws.onopen = () => send({type:"join", room, name: seat, pid: myPid});
 
@@ -498,29 +583,51 @@ function connect(){
     const msg = JSON.parse(ev.data);
 
     if (msg.type === "joined"){
-      el("status").textContent = `онлайн (кімната: ${msg.room})`;
+      if (el("status")) el("status").textContent = `онлайн (кімната: ${msg.room})`;
       setOnline(true);
+
+      // при підключенні одразу тягнемо hints + список збережень
       requestHintsSoon();
+      requestSavesList();
       return;
     }
+
     if (msg.type === "state"){
       state = msg.state;
       render();
       requestHintsSoon();
       return;
     }
+
     if (msg.type === "eval_result"){
       toast(`Оцінка: ${msg.cards.join(" ")} → ${msg.label}`);
       return;
     }
+
     if (msg.type === "hints_result"){
       renderHints(msg);
       return;
     }
+
+    // ✅ список збережень може приходити під різними type
+    if (msg.type === "saves_list" || msg.type === "saves_list_result" || msg.type === "saves"){
+      const items = msg.items || msg.saves || msg.list || [];
+      renderSavesList(items);
+      return;
+    }
+
+    // ✅ після save/delete/load можемо оновити список
+    if (msg.type === "save_created" || msg.type === "save_deleted" || msg.type === "save_loaded"){
+      requestSavesList();
+      toast("OK");
+      return;
+    }
+
     if (msg.type === "round_result"){
       toast(`Раунд #${msg.round.round} завершено`);
       return;
     }
+
     if (msg.type === "error"){
       toast("Помилка: " + msg.message);
       return;
@@ -529,7 +636,7 @@ function connect(){
 
   ws.onclose = ()=>{
     ws = null;
-    el("status").textContent = "офлайн";
+    if (el("status")) el("status").textContent = "офлайн";
     setOnline(false);
   };
 
@@ -541,7 +648,7 @@ function disconnect(){
   try { send({type:"leave"}); } catch {}
   ws.close();
   ws = null;
-  el("status").textContent = "офлайн";
+  if (el("status")) el("status").textContent = "офлайн";
   setOnline(false);
 }
 
@@ -551,72 +658,105 @@ function selectedIdList(){
   return Array.from(selectedCardIds).filter(id => !used.has(id));
 }
 
-el("connectBtn").onclick = connect;
-el("disconnectBtn").onclick = disconnect;
+if (el("connectBtn")) el("connectBtn").onclick = connect;
+if (el("disconnectBtn")) el("disconnectBtn").onclick = disconnect;
 
-  // optional: add unknown/blank card
-  const addUnknownBtn = el("unknownBtn") || el("addUnknownBtn") || el("addEmptyBtn") || el("addBlankBtn");
-  if (addUnknownBtn) {
-    addUnknownBtn.onclick = () => send({ type: "add_unknown" });
-  }
+// optional: add unknown/blank card
+const addUnknownBtn = el("unknownBtn") || el("addUnknownBtn") || el("addEmptyBtn") || el("addBlankBtn");
+if (addUnknownBtn) {
+  addUnknownBtn.onclick = () => send({ type: "add_unknown" });
+}
 
+if (el("newTabBtn")) {
+  el("newTabBtn").onclick = ()=>{
+    window.open(window.location.href, "_blank");
+  };
+}
 
-el("newTabBtn").onclick = ()=>{
-  window.open(window.location.href, "_blank");
-};
+if (el("seat")) {
+  el("seat").onchange = ()=>{
+    if (!ws) setPidFromSeat();
+  };
+}
 
-el("seat").onchange = ()=>{
-  if (!ws) setPidFromSeat();
-};
+if (el("dealMeBtn")) {
+  el("dealMeBtn").onclick = ()=>{
+    const n = parseInt(el("dealN")?.value, 10) || 0;
+    send({type:"deal", n});
+  };
+}
 
-el("dealMeBtn").onclick = ()=>{
-  const n = parseInt(el("dealN").value, 10) || 0;
-  send({type:"deal", n});
-};
+if (el("dealAllBtn")) {
+  el("dealAllBtn").onclick = ()=>{
+    const n = parseInt(el("dealN")?.value, 10) || 0;
+    send({type:"deal_all", n});
+  };
+}
 
-el("dealAllBtn").onclick = ()=>{
-  const n = parseInt(el("dealN").value, 10) || 0;
-  send({type:"deal_all", n});
-};
+if (el("clearHandBtn")) {
+  el("clearHandBtn").onclick = ()=> {
+    selectedCardIds.clear();
+    send({type:"clear_hand"});
+  };
+}
 
-el("clearHandBtn").onclick = ()=> {
-  selectedCardIds.clear();
-  send({type:"clear_hand"});
-};
+if (el("removeSelectedBtn")) {
+  el("removeSelectedBtn").onclick = ()=>{
+    const ids = selectedIdList();
+    if (!ids.length){
+      toast("Спочатку виберіть карти для видалення");
+      return;
+    }
+    send({ type:"remove_selected", card_ids: ids });
+    selectedCardIds.clear();
+  };
+}
 
-el("removeSelectedBtn").onclick = ()=>{
-  const ids = selectedIdList();
-  if (!ids.length){
-    toast("Спочатку виберіть карти для видалення");
-    return;
-  }
-  send({ type:"remove_selected", card_ids: ids });
-  selectedCardIds.clear();
-};
+if (el("evalBtn")) {
+  el("evalBtn").onclick = ()=>{
+    const ids = selectedIdList();
+    send({type:"eval_selected", card_ids: ids});
+  };
+}
 
-el("evalBtn").onclick = ()=>{
-  const ids = selectedIdList();
-  send({type:"eval_selected", card_ids: ids});
-};
+if (el("playBtn")) {
+  el("playBtn").onclick = ()=>{
+    const ids = selectedIdList();
+    const table = el("tableSelect")?.value;
+    if (!table){
+      toast("Оберіть стіл");
+      return;
+    }
+    send({type:"play_selected", card_ids: ids, table});
+    selectedCardIds.clear();
+  };
+}
 
-el("playBtn").onclick = ()=>{
-  const ids = selectedIdList();
-  const table = el("tableSelect").value;
-  if (!table){
-    toast("Оберіть стіл");
-    return;
-  }
-  send({type:"play_selected", card_ids: ids, table});
-  selectedCardIds.clear();
-};
+if (el("endRoundBtn")) {
+  el("endRoundBtn").onclick = ()=>{
+    send({ type: "end_round_vote" });
+  };
+}
 
-el("endRoundBtn").onclick = ()=>{
-  send({ type: "end_round_vote" });
-};
+if (el("forceEndRoundBtn")) {
+  el("forceEndRoundBtn").onclick = ()=>{
+    send({ type: "end_round_force" });
+  };
+}
 
-el("forceEndRoundBtn").onclick = ()=>{
-  send({ type: "end_round_force" });
-};
+// ✅ Знімки: кнопки + логіка
+if (el("saveBtn")) {
+  el("saveBtn").onclick = ()=>{
+    const name = getSaveName();
+    send({ type: "save_current", name });
+    // після збереження сервер може сам прислати список, але надійніше — оновити
+    setTimeout(requestSavesList, 250);
+  };
+}
+
+if (el("refreshSavesBtn")) {
+  el("refreshSavesBtn").onclick = ()=> requestSavesList();
+}
 
 /* ------------------ init ------------------ */
 setOnline(false);
