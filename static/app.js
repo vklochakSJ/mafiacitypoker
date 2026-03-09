@@ -177,12 +177,21 @@ function fillSuitSelect(selectEl){
   }
 }
 function setupSuitPickers(){
-  const pickC = el("pickC"), pickD = el("pickD"), pickH = el("pickH"), pickS = el("pickS");
-  [pickC,pickD,pickH,pickS].forEach(fillSuitSelect);
+  const pickC = el("pickC");
+  const pickD = el("pickD");
+  const pickH = el("pickH");
+  const pickS = el("pickS");
+
+  [pickC,pickD,pickH,pickS].forEach(p=>{
+    if (p) fillSuitSelect(p);
+  });
 
   const onPick = (suit, picker) => {
+    if (!picker) return;
+
     const r = picker.value;
     if (!r) return;
+
     send({ type:"add_manual", card: `${r}${suit}` });
     picker.value = "";
   };
@@ -762,3 +771,4 @@ if (el("refreshSavesBtn")) {
 setOnline(false);
 setupSuitPickers();
 setPidFromSeat();
+
