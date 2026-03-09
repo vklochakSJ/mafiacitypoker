@@ -451,7 +451,7 @@ function renderHistory(){
 
     for (const t of tables){
       const w = t.winner;
-      const wText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label}) #${w.placed_seq}` : "(нема)`;
+      const wText = w ? `${w.name}: ${w.cards.join(" ")} (${w.label}) #${w.placed_seq}` : "(нема)";
 
       const head = document.createElement("div");
       head.className = "small";
@@ -771,4 +771,5 @@ if (el("refreshSavesBtn")) {
 setOnline(false);
 setupSuitPickers();
 setPidFromSeat();
+
 
